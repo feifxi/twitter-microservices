@@ -15,6 +15,7 @@ import (
 	"github.com/twitter/shared/dbmigrate"
 	"github.com/twitter/shared/envutil"
 	"github.com/twitter/shared/events"
+	"github.com/twitter/shared/healthz"
 	"github.com/twitter/shared/logger"
 	sharedotel "github.com/twitter/shared/otel"
 	"github.com/twitter/shared/outbox"
@@ -72,7 +73,10 @@ func main() {
 	})
 	defer userReader.Close()
 
-	srv := server.New(tweetSvc, serviceToken, log)
+	srv := server.New(tweetSvc, serviceToken, log,
+		healthz.Func("postgres", pool.Ping),
+		healthz.Func("redis", func(ctx context.Context) error { return rdb.Ping(ctx).Err() }),
+	)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

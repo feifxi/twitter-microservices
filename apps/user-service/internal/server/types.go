@@ -7,11 +7,6 @@ import (
 	"github.com/twitter/user-service/internal/user"
 )
 
-type healthzResponse struct {
-	Status  string `json:"status"`
-	Service string `json:"service"`
-}
-
 type provisionRequest struct {
 	KeycloakSub string `json:"keycloak_sub" binding:"required"`
 	Email       string `json:"email"        binding:"required,email"`

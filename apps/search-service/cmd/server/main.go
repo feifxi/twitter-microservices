@@ -12,6 +12,7 @@ import (
 	"github.com/segmentio/kafka-go"
 	"github.com/twitter/shared/envutil"
 	"github.com/twitter/shared/events"
+	"github.com/twitter/shared/healthz"
 	"github.com/twitter/shared/logger"
 	sharedotel "github.com/twitter/shared/otel"
 	"github.com/twitter/search-service/internal/embeddings"
@@ -103,7 +104,10 @@ func main() {
 
 	idx := indexer.New(osClient, embedClient, log).WithDLQ(dlqWriter)
 	searchSvc := search.New(osClient, embedClient, userSvc, tweetEnricher, log)
-	srv := server.New(searchSvc, log)
+	srv := server.New(searchSvc, log,
+		healthz.Func("redis", func(ctx context.Context) error { return rdb.Ping(ctx).Err() }),
+		healthz.Func("opensearch", osClient.Ping),
+	)
 
 	go idx.Run(ctx, reader)
 

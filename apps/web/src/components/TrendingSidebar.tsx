@@ -143,7 +143,7 @@ export function TrendingSidebar() {
 						{label}
 					</span>
 				))}
-				<span>© {new Date().getFullYear()} X Corp.</span>
+				<span>© {new Date().getFullYear()} Fei Corp.</span>
 			</div>
 		</div>
 	);

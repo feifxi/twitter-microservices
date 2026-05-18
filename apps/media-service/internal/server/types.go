@@ -2,11 +2,6 @@ package server
 
 import "time"
 
-type healthzResponse struct {
-	Status  string `json:"status"`
-	Service string `json:"service"`
-}
-
 type presignRequest struct {
 	ContentType string `json:"content_type" binding:"required"`
 }

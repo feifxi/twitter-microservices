@@ -38,9 +38,15 @@ const (
 	celebThreshold = 1_000
 	celebFlagTTL   = time.Hour
 
-	trendingBucketKey   = "trending:%s:%s"
-	trendingLeaderboard = "trending:leaderboard"
-	trendingBucketTTL   = time.Hour
+	// One ZSET per minute (tag → count). ZUNIONSTORE of the last
+	// trendingWindowMinutes buckets at read time gives a sliding-window
+	// leaderboard with automatic decay — old buckets expire via TTL, no
+	// daily reset needed.
+	trendingMinuteKey     = "trending:minute:%d"
+	trendingMinuteTTL     = 70 * time.Minute
+	trendingWindowMinutes = 60
+	trendingWindowKey     = "trending:window:%d"
+	trendingWindowKeyTTL  = 5 * time.Minute
 
 	userInterestsKey = "user_interests:%s"
 	userAffinityKey  = "user_affinity:%s"
@@ -390,22 +396,38 @@ func (c *Consumer) IncrementTrending(ctx context.Context, hashtags []string) {
 	if len(hashtags) == 0 {
 		return
 	}
-	minuteBucket := time.Now().Unix() / 60
-
+	key := MinuteBucketKey(MinuteBucket(time.Now()))
 	pipe := c.rdb.Pipeline()
 	for _, tag := range hashtags {
-		bucketKey := fmt.Sprintf(trendingBucketKey, tag, strconv.FormatInt(minuteBucket, 10))
-		pipe.Incr(ctx, bucketKey)
-		pipe.Expire(ctx, bucketKey, trendingBucketTTL)
-		pipe.ZIncrBy(ctx, trendingLeaderboard, 1, tag)
+		pipe.ZIncrBy(ctx, key, 1, tag)
 	}
+	pipe.Expire(ctx, key, trendingMinuteTTL)
 	if _, err := pipe.Exec(ctx); err != nil {
 		c.log.ErrorContext(ctx, "trending increment", "err", err)
 	}
 }
 
+// Unions the last trendingWindowMinutes bucket ZSETs into a per-minute
+// destination key (atomically overwritten by concurrent callers, TTL'd so it
+// self-cleans), then server-side paginates the top N. New hashtags appear in
+// the result as soon as the next read crosses ZUNIONSTORE.
 func (c *Consumer) GetTrending(ctx context.Context, topN int) ([]TrendingTag, error) {
-	results, err := c.rdb.ZRevRangeWithScores(ctx, trendingLeaderboard, 0, int64(topN-1)).Result()
+	if topN <= 0 {
+		return []TrendingTag{}, nil
+	}
+	now := MinuteBucket(time.Now())
+	keys := make([]string, trendingWindowMinutes)
+	for i := 0; i < trendingWindowMinutes; i++ {
+		keys[i] = MinuteBucketKey(now - int64(i))
+	}
+	destKey := fmt.Sprintf(trendingWindowKey, now)
+	if _, err := c.rdb.ZUnionStore(ctx, destKey, &redis.ZStore{Keys: keys}).Result(); err != nil {
+		return nil, err
+	}
+	// Best-effort — Expire on an empty key is a no-op.
+	c.rdb.Expire(ctx, destKey, trendingWindowKeyTTL)
+
+	results, err := c.rdb.ZRevRangeWithScores(ctx, destKey, 0, int64(topN-1)).Result()
 	if err != nil {
 		return nil, err
 	}
@@ -464,33 +486,14 @@ func (c *Consumer) SetCachedFollowingFeed(ctx context.Context, userID string, da
 	c.rdb.Set(ctx, fmt.Sprintf(followingCacheKey, userID), data, followingCacheTTL)
 }
 
-// Resets the trending leaderboard daily at midnight UTC.
-func (c *Consumer) RunTrendingReset(ctx context.Context) {
-	for {
-		now := time.Now().UTC()
-		next := time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, time.UTC)
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(time.Until(next)):
-			if err := c.rdb.Del(ctx, trendingLeaderboard).Err(); err != nil {
-				c.log.ErrorContext(ctx, "trending reset", "err", err)
-			} else {
-				c.log.InfoContext(ctx, "trending leaderboard reset")
-			}
-		}
-	}
-}
-
-// MinuteBucket returns the current minute epoch for a given time.
 // Exported for tests.
 func MinuteBucket(t time.Time) int64 {
 	return t.Unix() / 60
 }
 
 // Exported for tests.
-func BucketKey(tag string, bucket int64) string {
-	return fmt.Sprintf(trendingBucketKey, tag, strconv.FormatInt(bucket, 10))
+func MinuteBucketKey(bucket int64) string {
+	return fmt.Sprintf(trendingMinuteKey, bucket)
 }
 
 func (c *Consumer) IsCeleb(ctx context.Context, userID string) bool {

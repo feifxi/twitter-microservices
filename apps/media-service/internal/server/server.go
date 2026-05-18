@@ -11,17 +11,19 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/twitter/media-service/internal/media"
 	"github.com/twitter/shared/auth"
+	"github.com/twitter/shared/healthz"
 	"github.com/twitter/shared/metrics"
 	"github.com/twitter/shared/reqlog"
 )
 
 type Server struct {
-	media *media.Service
-	log   *slog.Logger
+	media    *media.Service
+	log      *slog.Logger
+	checkers []healthz.Checker
 }
 
-func New(media *media.Service, log *slog.Logger) *Server {
-	return &Server{media: media, log: log}
+func New(media *media.Service, log *slog.Logger, checkers ...healthz.Checker) *Server {
+	return &Server{media: media, log: log, checkers: checkers}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -63,15 +65,12 @@ func (s *Server) routes() *gin.Engine {
 	r.Use(reqlog.StructuredLogger(s.log))
 	r.Use(metrics.GinMiddleware("media-service"))
 
-	r.GET("/healthz", s.handleHealthz)
+	r.GET("/healthz", healthz.Handler("media-service", s.checkers...))
+	r.GET("/livez", healthz.Livez("media-service"))
 	r.GET("/metrics", metrics.MetricsHandler())
 
 	protected := r.Group("/v1", auth.HeadersMiddleware())
 	protected.POST("/media/presign", s.handlePresign)
 
 	return r
-}
-
-func (s *Server) handleHealthz(c *gin.Context) {
-	c.JSON(http.StatusOK, healthzResponse{Status: "ok", Service: "media-service"})
 }

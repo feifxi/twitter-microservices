@@ -245,7 +245,7 @@ services:
         condition: service_healthy
     mem_limit: 256m
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/livez || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -277,7 +277,7 @@ services:
         condition: service_completed_successfully
     mem_limit: 256m
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/livez || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -306,7 +306,7 @@ services:
         condition: service_completed_successfully
     mem_limit: 256m
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/livez || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -335,7 +335,7 @@ services:
         condition: service_completed_successfully
     mem_limit: 256m
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/livez || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -362,7 +362,7 @@ services:
         condition: service_healthy
     mem_limit: 128m
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/livez || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -398,7 +398,7 @@ services:
         condition: service_healthy
     mem_limit: 128m
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/livez || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5

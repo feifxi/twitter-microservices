@@ -15,6 +15,8 @@ import { keys, matchers, type ProfileTweetsFilter } from "@/lib/query-keys";
 import type { ProfileInput } from "@/lib/schemas";
 import type {
 	FeedResponse,
+	SearchUser,
+	SearchUsersResponse,
 	User,
 	UserListItem,
 	UserListResponse,
@@ -103,15 +105,20 @@ export function useUpdateProfile(userId: string) {
 // (different hook instances, same conceptual toggle) collapses to one net call.
 //
 // is_following lives in several caches across the app — single-user, all
-// user-list pages (followers/following), and suggestions. We propagate the
-// optimistic update to ALL of them so the button reflects state everywhere
-// the user appears, not just on the profile page.
+// user-list pages (followers/following), suggestions, and search results. We
+// propagate the optimistic update to ALL of them so the button reflects state
+// everywhere the user appears, not just on the profile page.
 
-function applyUserListUpdate(
-	data: InfiniteData<UserListResponse, string | undefined> | undefined,
+interface UserListPageShape<U> {
+	users: U[];
+	next_cursor: string | null;
+}
+
+function applyUserListUpdate<U extends { id: string }>(
+	data: InfiniteData<UserListPageShape<U>, string | undefined> | undefined,
 	targetId: string,
-	patch: Partial<UserListItem>,
-): InfiniteData<UserListResponse, string | undefined> | undefined {
+	patch: Partial<U>,
+): InfiniteData<UserListPageShape<U>, string | undefined> | undefined {
 	if (!data) return data;
 	return {
 		...data,
@@ -155,6 +162,14 @@ function applyFollowUpdate(
 			old?.map((u) =>
 				u.id === targetId ? { ...u, is_following: intendedState } : u,
 			),
+	);
+	// Explore search results — shape: InfiniteData<SearchUsersResponse>
+	qc.setQueriesData<InfiniteData<SearchUsersResponse, string | undefined>>(
+		{ predicate: (q) => matchers.searchUsers(q.queryKey) },
+		(old) =>
+			applyUserListUpdate<SearchUser>(old, targetId, {
+				is_following: intendedState,
+			}),
 	);
 }
 

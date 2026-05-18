@@ -8,11 +8,6 @@ import (
 	"github.com/twitter/feed-service/internal/tweetclient"
 )
 
-type healthzResponse struct {
-	Status  string `json:"status"`
-	Service string `json:"service"`
-}
-
 // Wire shape mirrors tweet-service so a tweet rendered from /v1/feed/* is
 // byte-identical to one from /v1/users/:id/tweets.
 

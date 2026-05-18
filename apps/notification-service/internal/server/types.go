@@ -6,11 +6,6 @@ import (
 	db "github.com/twitter/notification-service/db/sqlc"
 )
 
-type healthzResponse struct {
-	Status  string `json:"status"`
-	Service string `json:"service"`
-}
-
 type actorInfo struct {
 	ID          string
 	Username    string

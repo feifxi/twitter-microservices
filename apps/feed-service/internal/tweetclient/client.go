@@ -11,6 +11,7 @@ import (
 	"google.golang.org/grpc/metadata"
 
 	"github.com/twitter/shared/breaker"
+	"github.com/twitter/shared/grpcretry"
 	tweetv1 "github.com/twitter/shared/proto/gen/tweet/v1"
 )
 
@@ -61,6 +62,7 @@ func New(target, serviceToken string) (*Client, error) {
 	conn, err := grpc.NewClient(target,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
+		grpc.WithUnaryInterceptor(grpcretry.UnaryClientInterceptor(grpcretry.Options{})),
 	)
 	if err != nil {
 		return nil, err

@@ -10,18 +10,20 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/twitter/shared/auth"
+	"github.com/twitter/shared/healthz"
 	"github.com/twitter/shared/metrics"
 	"github.com/twitter/shared/reqlog"
 	"github.com/twitter/feed-service/internal/feed"
 )
 
 type Server struct {
-	feed *feed.Service
-	log  *slog.Logger
+	feed     *feed.Service
+	log      *slog.Logger
+	checkers []healthz.Checker
 }
 
-func New(svc *feed.Service, log *slog.Logger) *Server {
-	return &Server{feed: svc, log: log}
+func New(svc *feed.Service, log *slog.Logger, checkers ...healthz.Checker) *Server {
+	return &Server{feed: svc, log: log, checkers: checkers}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -63,7 +65,8 @@ func (s *Server) routes() *gin.Engine {
 	r.Use(reqlog.StructuredLogger(s.log))
 	r.Use(metrics.GinMiddleware("feed-service"))
 
-	r.GET("/healthz", s.handleHealthz)
+	r.GET("/healthz", healthz.Handler("feed-service", s.checkers...))
+	r.GET("/livez", healthz.Livez("feed-service"))
 	r.GET("/metrics", metrics.MetricsHandler())
 
 	v1 := r.Group("/v1")
@@ -76,8 +79,4 @@ func (s *Server) routes() *gin.Engine {
 	protected.GET("/recommended", s.handleRecommendedFeed)
 
 	return r
-}
-
-func (s *Server) handleHealthz(c *gin.Context) {
-	c.JSON(http.StatusOK, healthzResponse{Status: "ok", Service: "feed-service"})
 }

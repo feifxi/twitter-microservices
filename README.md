@@ -1,10 +1,24 @@
-# Twitter Clone
+# Twitter Microservices
 
 Cloud-native microservices Twitter clone — learning project for distributed systems, event-driven architecture, and SRE practice.
 
+![Preview](docs/images/preview.png)
+
 ## Stack
 
-Go 1.26 · Gin · sqlc · PostgreSQL · Redis · Redpanda (Kafka) · OpenSearch · LocalStack (S3) · Keycloak · Kong · Next.js 16 · Docker · Terraform → EKS.
+| Component | Local Dev | Production (AWS) |
+|-----------|-----------|-----------------|
+| Language / framework | Go 1.26 · Gin · sqlc | *(same)* |
+| Frontend | Next.js 16 | *(same)* |
+| API Gateway | Kong | *(same)* |
+| Auth | Keycloak | *(same)* |
+| Database | PostgreSQL | Aurora PostgreSQL Serverless v2 |
+| Cache | Redis | ElastiCache |
+| Message broker | Redpanda | Amazon MSK (Kafka) |
+| Search | OpenSearch | Amazon OpenSearch Service |
+| Object storage | LocalStack (S3) | Amazon S3 |
+| Orchestration | Docker Compose | Amazon EKS · Terraform |
+| Observability | slog · Prometheus · OpenTelemetry → Jaeger | slog · CloudWatch · OpenTelemetry → X-Ray |
 
 ## Services
 
@@ -69,11 +83,13 @@ make healthcheck       # curl all /healthz endpoints
 
 Keycloak (OIDC + Google IdP) → Kong (JWT validation) → injects `X-User-ID` / `X-User-Email` / `X-User-Username` headers. Services never handle tokens.
 
+## Observability
+
+Every service emits JSON logs (`slog`), Prometheus metrics on `/metrics`, and OTLP traces. W3C `traceparent` is propagated through HTTP, gRPC, and Kafka headers so a single request can be followed from Kong → service → outbox → consumer → SSE in one Jaeger trace.
+
 ## Docs
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — service layout, data models, Kafka contracts, Redis schema, conventions
-- [docs/BACKEND_DENORM_PLAN.md](docs/BACKEND_DENORM_PLAN.md) — cross-service denormalization & search-parity design
-- [docs/api/](docs/api/) — one file per service
 
 ## Troubleshooting
 

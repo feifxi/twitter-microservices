@@ -11,6 +11,7 @@ import (
 	"github.com/segmentio/kafka-go"
 	"github.com/twitter/shared/dbmigrate"
 	"github.com/twitter/shared/envutil"
+	"github.com/twitter/shared/healthz"
 	"github.com/twitter/shared/logger"
 	sharedotel "github.com/twitter/shared/otel"
 	"github.com/twitter/shared/outbox"
@@ -59,7 +60,9 @@ func main() {
 
 	serviceToken := envutil.MustEnv("SERVICE_TOKEN")
 	userSvc := user.New(db.NewStore(pool), kw, kc, log)
-	srv := server.New(userSvc, serviceToken, log)
+	srv := server.New(userSvc, serviceToken, log,
+		healthz.Func("postgres", pool.Ping),
+	)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

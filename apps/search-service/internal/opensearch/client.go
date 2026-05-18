@@ -68,6 +68,19 @@ func New(addr string) (*Client, error) {
 
 func (c *Client) Addr() string { return c.addr }
 
+// Ping issues a HEAD against the root endpoint — cheapest reachability check.
+func (c *Client) Ping(ctx context.Context) error {
+	resp, err := opensearchapi.PingRequest{}.Do(ctx, c.os)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.IsError() {
+		return fmt.Errorf("opensearch ping: %s", resp.Status())
+	}
+	return nil
+}
+
 func (c *Client) EnsureIndices(ctx context.Context) error {
 	if err := c.createIndex(ctx, IndexTweets, tweetMapping()); err != nil {
 		return fmt.Errorf("ensure tweets index: %w", err)

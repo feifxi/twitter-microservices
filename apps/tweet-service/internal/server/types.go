@@ -9,11 +9,6 @@ import (
 	"github.com/twitter/tweet-service/internal/tweet"
 )
 
-type healthzResponse struct {
-	Status  string `json:"status"`
-	Service string `json:"service"`
-}
-
 type tweetBodyRequest struct {
 	Body     string  `json:"body"      binding:"max=280"`
 	MediaID  *string `json:"media_id"  binding:"omitempty,max=50"`

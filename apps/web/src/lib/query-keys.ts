@@ -63,4 +63,8 @@ export const matchers = {
 	// Flat suggestions array.
 	userSuggestions: (key: readonly unknown[]): boolean =>
 		key[0] === "user-suggestions",
+
+	// Search users infinite list — pages have `.users[]` (SearchUsersResponse).
+	searchUsers: (key: readonly unknown[]): boolean =>
+		key[0] === "search" && key[1] === "users",
 };

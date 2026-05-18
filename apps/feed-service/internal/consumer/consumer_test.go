@@ -86,7 +86,7 @@ func TestFanOut_TrimsTimeline(t *testing.T) {
 	}
 }
 
-func TestIncrementTrending_UpdatesLeaderboard(t *testing.T) {
+func TestIncrementTrending_UpdatesCurrentBucket(t *testing.T) {
 	fanout := &stubFanout{}
 	c, _ := newTestConsumer(t, fanout)
 	ctx := context.Background()
@@ -141,10 +141,10 @@ func TestMinuteBucket_Stable(t *testing.T) {
 	}
 }
 
-func TestBucketKey_Format(t *testing.T) {
-	key := BucketKey("#golang", 12345)
-	expected := "trending:#golang:12345"
+func TestMinuteBucketKey_Format(t *testing.T) {
+	key := MinuteBucketKey(12345)
+	expected := "trending:minute:12345"
 	if key != expected {
-		t.Errorf("BucketKey = %q, want %q", key, expected)
+		t.Errorf("MinuteBucketKey = %q, want %q", key, expected)
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/segmentio/kafka-go"
 	"github.com/twitter/shared/envutil"
 	"github.com/twitter/shared/events"
+	"github.com/twitter/shared/healthz"
 	"github.com/twitter/shared/logger"
 	sharedotel "github.com/twitter/shared/otel"
 	"github.com/twitter/feed-service/internal/consumer"
@@ -79,12 +80,13 @@ func main() {
 	defer reader.Close()
 
 	feedSvc := feed.New(c, tweetSvc, userSvc, log)
-	srv := server.New(feedSvc, log)
+	srv := server.New(feedSvc, log,
+		healthz.Func("redis", func(ctx context.Context) error { return rdb.Ping(ctx).Err() }),
+	)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	go c.RunTrendingReset(ctx)
 	go c.RunTweetConsumer(ctx, reader)
 
 	srv.Start(ctx, ":"+envutil.GetEnv("PORT", "8080"))

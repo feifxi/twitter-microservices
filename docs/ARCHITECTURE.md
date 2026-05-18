@@ -838,12 +838,38 @@ failing the search.
 
 ---
 
-### All services — `GET /healthz`
+### All services — `GET /healthz` and `GET /livez`
 
-**Response `200`:**
+Two endpoints, both unauth:
+
+- **`/livez`** — liveness. Always 200 if the process is running. Used by k8s `livenessProbe` and the docker-compose container health check. A transient backing-store flake must not restart the pod.
+- **`/healthz`** — readiness. Probes the service's real dependencies (DB, Redis, OpenSearch, …) concurrently with a 1.5s timeout. Returns 200 with per-dep status when all are reachable; 503 with the same shape (and an `error` field per failed dep) when any fails. Used by k8s `readinessProbe`, the ALB target group, and the `make healthcheck` dev target — pod is taken out of rotation while deps are unreachable.
+
+**`/healthz` 200 response:**
 ```json
-{ "status": "ok", "service": "tweet-service" }
+{
+  "status": "ok",
+  "service": "tweet-service",
+  "deps": [
+    { "name": "postgres", "status": "ok", "error": "" },
+    { "name": "redis",    "status": "ok", "error": "" }
+  ]
+}
 ```
+
+**`/healthz` 503 response** (one dep down):
+```json
+{
+  "status": "degraded",
+  "service": "tweet-service",
+  "deps": [
+    { "name": "postgres", "status": "ok",    "error": "" },
+    { "name": "redis",    "status": "error", "error": "dial tcp 10.0.0.4:6379: connect: connection refused" }
+  ]
+}
+```
+
+**`/livez` 200 response:** `{ "status": "ok", "service": "tweet-service", "deps": [] }`
 
 ---
 
@@ -1295,13 +1321,14 @@ celeb:{user_id}
   time; their tweets are merged lazily at feed read time via GetTweetsByAuthor gRPC.
 
 # ── Trending ─────────────────────────────────────────────────────────────────
-trending:{tag}:{minute_epoch}
-  STRING  integer count
-  TTL:    1 hour (auto-cleanup — no manual delete needed)
+trending:minute:{minute_epoch}
+  SORTED SET  member=tag, score=count within that minute
+  TTL:        70 minutes (auto-decay — older buckets drop out of the window)
 
-trending:leaderboard
-  SORTED SET  member=tag, score=total_count
-  Reset daily by a background goroutine in feed-service
+trending:window:{minute_epoch}
+  SORTED SET  ZUNIONSTORE destination over the last 60 trending:minute:* buckets;
+              read-side cache, atomically overwritten by concurrent callers.
+  TTL:        5 minutes
 
 # ── Recommended feed ─────────────────────────────────────────────────────────
 recommended:{user_id}
@@ -1533,15 +1560,21 @@ tweet-service extracts hashtags from tweet body via `#\w+` regex, includes them 
 feed-service Kafka consumer, on each `tweet.created`:
 ```
 minute := time.Now().Unix() / 60
+key    := "trending:minute:{minute}"
 for each tag in hashtags:
-    INCR  trending:{tag}:{minute}      # per-minute bucket for decay
-    EXPIRE trending:{tag}:{minute} 3600
-    ZINCRBY trending:leaderboard 1 tag # running total for fast reads
+    ZINCRBY  key 1 tag
+EXPIRE key 70m   # window + safety margin
 ```
 
-`GET /v1/feed/trending` → `ZREVRANGE trending:leaderboard 0 N WITHSCORES` (O(log N + N)).
+`GET /v1/feed/trending` builds a 60-minute sliding window on each read:
+```
+keys := trending:minute:{minute - 0..59}
+ZUNIONSTORE  trending:window:{minute}  keys
+EXPIRE       trending:window:{minute} 5m
+ZREVRANGE    trending:window:{minute} 0 N-1 WITHSCORES
+```
 
-The leaderboard is reset at midnight by a background goroutine in feed-service. If feed-service crashes at midnight, the reset is skipped until the next day — acceptable for trending data.
+ZUNIONSTORE is atomic and idempotent across concurrent callers, so the per-minute destination key acts as a short-lived read cache. New hashtags appear on the next read once their bucket is incremented — no daily reset, no cumulative bias from earlier-in-the-day tags. Older buckets drop out of the window automatically as their TTL expires.
 
 ### Recommended Feed
 
@@ -1776,12 +1809,16 @@ CloudWatch EMF metrics: ingest the Prometheus surface into CW EMF; alarms on
 Insights for pod-level CPU/memory. AWS X-Ray as the prod backend (OTLP-compatible
 exporter — services don't change).
 
+### Shipped (Phase 12 — Resilience)
+
+- **`/healthz` dependency probes:** concurrent ping of each service's real deps (Postgres, Redis, OpenSearch) with a 1.5s timeout; returns 503 with a per-dep status body when any fails. ALB / k8s `readinessProbe` use this. `/livez` stays cheap and is used for liveness so transient blips don't restart pods.
+- **gRPC retry with backoff + jitter** on the four cross-service clients (feed → user, feed → tweet, search → user, search → tweet). Sits inside the gobreaker boundary so the breaker observes the final outcome. 3 attempts, 50ms base, 500ms cap, full jitter; retries only on `Unavailable` / `DeadlineExceeded`, never on application-level codes. Context-cancellation aware.
+
 ### Planned (Phase 12 — Resilience)
 
-- **Retry with backoff + jitter** on gRPC clients (max 3 attempts)
-- **`/healthz` dependency checks:** DB ping + Redis ping — ALB marks pod unhealthy if deps fail
-- **HPA:** tweet-service and feed-service scale on CPU > 60%
+- **HPA:** tweet-service and feed-service scale on CPU > 60% (Phase 9, needs EKS)
 - **Chaos exercises:** kill feed-service / Redis, verify Redis-miss graceful degradation paths
+- **k6 load test:** 50 concurrent feed reads + 20 tweet posts/sec for 2 min via Kong
 
 ---
 
@@ -1825,7 +1862,7 @@ Directory layout, Go service bootstraps, Next.js App Router, docker-compose, Mak
 ---
 
 ### Phase 3 — Feed Service ✅
-Kafka consumers for 7 topics. Fan-out with celebrity threshold (≥1K), bounded by a 100-slot semaphore. Redis denormalisation: `tweet:snapshot` (embedded author), `author_tweets`, `following:*` (T|/R| feed entries), affinity signals. Following feed (cursor + celeb merge + GetInteractions + 60s assembled-page cache). Recommended feed (interest + affinity scoring, 15-min TTL cache). Trending (per-minute buckets + sorted set + daily reset). Integration tests.
+Kafka consumers for 7 topics. Fan-out with celebrity threshold (≥1K), bounded by a 100-slot semaphore. Redis denormalisation: `tweet:snapshot` (embedded author), `author_tweets`, `following:*` (T|/R| feed entries), affinity signals. Following feed (cursor + celeb merge + GetInteractions + 60s assembled-page cache). Recommended feed (interest + affinity scoring, 15-min TTL cache). Trending (per-minute ZSETs + ZUNIONSTORE 60-min sliding window, auto-decay via TTL). Integration tests.
 
 ---
 
@@ -1914,9 +1951,8 @@ feed reads, 20 tweet posts), chaos testing (kill feed-service, kill Redis).
 
 ### Appendix — Airflow Discussion (not scheduled)
 
-Two goroutines that would benefit from Airflow visibility once the system matures:
+One future job that would benefit from Airflow visibility once the system matures:
 
-1. **Daily trending reset** — currently a goroutine in feed-service; silently skipped if the pod crashes at midnight.
-2. **Nightly analytics export** — not yet implemented; would export Postgres aggregates → S3 CSV for reporting.
+1. **Nightly analytics export** — not yet implemented; would export Postgres aggregates → S3 CSV for reporting.
 
-Airflow adds: UI visibility, automatic retry, backfill for missed runs, built-in alerting — vs the current "goroutine that logs a warning on failure."
+Airflow adds: UI visibility, automatic retry, backfill for missed runs, built-in alerting — vs a "goroutine that logs a warning on failure."

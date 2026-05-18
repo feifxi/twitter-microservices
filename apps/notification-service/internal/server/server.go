@@ -12,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
 	"github.com/twitter/shared/auth"
+	"github.com/twitter/shared/healthz"
 	"github.com/twitter/shared/metrics"
 	"github.com/twitter/shared/reqlog"
 	"github.com/twitter/notification-service/internal/notification"
@@ -24,14 +25,15 @@ const (
 )
 
 type Server struct {
-	notif *notification.Service
-	hub   *notification.Hub
-	rdb   *redis.Client
-	log   *slog.Logger
+	notif    *notification.Service
+	hub      *notification.Hub
+	rdb      *redis.Client
+	log      *slog.Logger
+	checkers []healthz.Checker
 }
 
-func New(notif *notification.Service, hub *notification.Hub, rdb *redis.Client, log *slog.Logger) *Server {
-	return &Server{notif: notif, hub: hub, rdb: rdb, log: log}
+func New(notif *notification.Service, hub *notification.Hub, rdb *redis.Client, log *slog.Logger, checkers ...healthz.Checker) *Server {
+	return &Server{notif: notif, hub: hub, rdb: rdb, log: log, checkers: checkers}
 }
 
 // lookupActors fetches actor profiles for the given IDs from Redis snapshots via a pipeline.
@@ -161,7 +163,8 @@ func (s *Server) routes() *gin.Engine {
 	r.Use(reqlog.StructuredLogger(s.log))
 	r.Use(metrics.GinMiddleware("notification-service"))
 
-	r.GET("/healthz", s.handleHealthz)
+	r.GET("/healthz", healthz.Handler("notification-service", s.checkers...))
+	r.GET("/livez", healthz.Livez("notification-service"))
 	r.GET("/metrics", metrics.MetricsHandler())
 
 	protected := r.Group("/v1", auth.HeadersMiddleware())
@@ -171,8 +174,4 @@ func (s *Server) routes() *gin.Engine {
 	protected.GET("/notifications/stream", s.handleStream)
 
 	return r
-}
-
-func (s *Server) handleHealthz(c *gin.Context) {
-	c.JSON(http.StatusOK, healthzResponse{Status: "ok", Service: "notification-service"})
 }

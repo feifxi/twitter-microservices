@@ -13,6 +13,7 @@ import (
 	"github.com/twitter/shared/dbmigrate"
 	"github.com/twitter/shared/envutil"
 	"github.com/twitter/shared/events"
+	"github.com/twitter/shared/healthz"
 	"github.com/twitter/shared/logger"
 	sharedotel "github.com/twitter/shared/otel"
 	db "github.com/twitter/notification-service/db/sqlc"
@@ -72,7 +73,10 @@ func main() {
 	defer dlqWriter.Close()
 
 	cons := consumer.New(notifSvc, store, rdb, dlqWriter, log)
-	srv := server.New(notifSvc, hub, rdb, log)
+	srv := server.New(notifSvc, hub, rdb, log,
+		healthz.Func("postgres", pool.Ping),
+		healthz.Func("redis", func(ctx context.Context) error { return rdb.Ping(ctx).Err() }),
+	)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

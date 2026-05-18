@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/twitter/shared/auth"
+	"github.com/twitter/shared/healthz"
 	"github.com/twitter/shared/metrics"
 	"github.com/twitter/shared/reqlog"
 	"github.com/twitter/user-service/internal/user"
@@ -19,10 +20,11 @@ type Server struct {
 	user         *user.Service
 	serviceToken string
 	log          *slog.Logger
+	checkers     []healthz.Checker
 }
 
-func New(user *user.Service, serviceToken string, log *slog.Logger) *Server {
-	return &Server{user: user, serviceToken: serviceToken, log: log}
+func New(user *user.Service, serviceToken string, log *slog.Logger, checkers ...healthz.Checker) *Server {
+	return &Server{user: user, serviceToken: serviceToken, log: log, checkers: checkers}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -67,7 +69,8 @@ func (s *Server) routes() *gin.Engine {
 	r.Use(reqlog.StructuredLogger(s.log))
 	r.Use(metrics.GinMiddleware("user-service"))
 
-	r.GET("/healthz", s.handleHealthz)
+	r.GET("/healthz", healthz.Handler("user-service", s.checkers...))
+	r.GET("/livez", healthz.Livez("user-service"))
 	r.GET("/metrics", metrics.MetricsHandler())
 
 	internal := r.Group("/internal", auth.ServiceTokenMiddleware(s.serviceToken))
@@ -87,8 +90,4 @@ func (s *Server) routes() *gin.Engine {
 	authed.GET("/users/:id/following", s.handleListFollowing)
 
 	return r
-}
-
-func (s *Server) handleHealthz(c *gin.Context) {
-	c.JSON(http.StatusOK, healthzResponse{Status: "ok", Service: "user-service"})
 }

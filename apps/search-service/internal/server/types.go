@@ -6,11 +6,6 @@ import (
 	"github.com/twitter/search-service/internal/search"
 )
 
-type healthzResponse struct {
-	Status  string `json:"status"`
-	Service string `json:"service"`
-}
-
 type authorSnap struct {
 	ID          string  `json:"id"`
 	Username    *string `json:"username"`
