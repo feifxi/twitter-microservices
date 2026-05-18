@@ -1,0 +1,56 @@
+# Go
+bin/
+*.exe
+*.test
+*.out
+vendor/
+
+# Go compiled binaries (local builds outside Docker)
+# "service" = output of: go build -o service ./cmd/server  (used in Dockerfiles)
+# "server"  = output of: go build ./cmd/server             (Go names it after the dir)
+apps/*/service
+apps/*/server
+apps/*/cmd/server/server
+
+# Go generated (sqlc)
+apps/*/db/sqlc/
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+.env
+.env.local
+.env.*.local
+
+# Terraform
+infra/terraform/.terraform/
+infra/terraform/*.tfstate
+infra/terraform/*.tfstate.backup
+infra/terraform/*.tfplan
+infra/terraform/.terraform.lock.hcl
+
+# Secrets / credentials (never commit these)
+*.pem
+*.key
+secrets/
+.secrets
+.env.keys
+local/keycloak/realm-twitter.json
+local/keycloak-spi/target/
+
+# Docker
+.dockerignore
+
+# Claude Code (local plans, hooks, per-developer settings)
+# CLAUDE.md files are intentionally NOT ignored — they are project documentation
+.claude/
+
+# IDE
+.DS_Store
+.idea/
+# .vscode is per-dev — but settings.json and extensions.json are shared workspace config
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+*.swp

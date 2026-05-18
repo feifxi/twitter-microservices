@@ -1,0 +1,790 @@
+{
+  "info": {
+    "_postman_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "name": "Twitter Clone",
+    "description": "Local dev collection. All requests go through Kong (port 8000) — the real production path.\n\nSetup:\n1. Start the stack: `make dev`\n2. Log in at http://localhost:3000 — copy the access token and paste it into the `token` collection variable.\n3. `user_id` is decoded automatically from the token by the collection pre-request script.\n\nHealth checks hit services directly (Kong does not proxy /healthz).\nFor isolated service debugging, use the direct `*_svc` variables in request URLs.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "kong",
+      "value": "http://localhost:8000",
+      "description": "Kong gateway — all client traffic goes here"
+    },
+    {
+      "key": "user_svc",
+      "value": "http://localhost:8001",
+      "description": "Direct to user-service — for isolated debugging only"
+    },
+    {
+      "key": "tweet_svc",
+      "value": "http://localhost:8002",
+      "description": "Direct to tweet-service — for isolated debugging only"
+    },
+    {
+      "key": "feed_svc",
+      "value": "http://localhost:8003",
+      "description": "Direct to feed-service — for isolated debugging only"
+    },
+    {
+      "key": "notification_svc",
+      "value": "http://localhost:8004",
+      "description": "Direct to notification-service — for isolated debugging only"
+    },
+    {
+      "key": "media_svc",
+      "value": "http://localhost:8005",
+      "description": "Direct to media-service — for isolated debugging only"
+    },
+    {
+      "key": "search_svc",
+      "value": "http://localhost:8006",
+      "description": "Direct to search-service — for isolated debugging only"
+    },
+    {
+      "key": "token",
+      "value": "",
+      "description": "JWT access token — copy from the web app UI after login"
+    },
+    {
+      "key": "user_id",
+      "value": "",
+      "description": "Your Keycloak user ID (JWT sub claim) — auto-decoded from token by pre-request script"
+    },
+    {
+      "key": "tweet_id",
+      "value": "",
+      "description": "Auto-filled by Create Tweet"
+    },
+    {
+      "key": "media_id",
+      "value": "",
+      "description": "Auto-filled by Get Presigned Upload URL"
+    },
+    {
+      "key": "target_user_id",
+      "value": "",
+      "description": "A second user ID — fill manually for follow/unfollow tests"
+    },
+    {
+      "key": "notification_id",
+      "value": "",
+      "description": "Fill manually for Mark One As Read"
+    }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "const token = pm.collectionVariables.get('token');",
+          "if (token) {",
+          "    try {",
+          "        const payload = JSON.parse(atob(token.split('.')[1]));",
+          "        if (payload.sub) pm.collectionVariables.set('user_id', payload.sub);",
+          "    } catch (e) {}",
+          "}"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "Users",
+      "item": [
+        {
+          "name": "Get User Profile",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{kong}}/v1/users/{{user_id}}",
+              "host": ["{{kong}}"],
+              "path": ["v1", "users", "{{user_id}}"]
+            },
+            "description": "Returns public profile. `is_following` is relative to the authenticated viewer."
+          }
+        },
+        {
+          "name": "Get Me",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{kong}}/v1/users/me",
+              "host": ["{{kong}}"],
+              "path": ["v1", "users", "me"]
+            },
+            "description": "Returns the authenticated user's profile including `email`. ID resolved from the JWT."
+          }
+        },
+        {
+          "name": "Update Me",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"username\": \"alice_new\",\n    \"display_name\": \"Alice Smith\",\n    \"avatar_url\": \"https://example.com/avatar.jpg\",\n    \"header_image_url\": \"https://example.com/header.jpg\",\n    \"bio\": \"Software engineer\",\n    \"website_url\": \"https://alice.dev\",\n    \"location\": \"Bangkok, TH\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{kong}}/v1/users/me",
+              "host": ["{{kong}}"],
+              "path": ["v1", "users", "me"]
+            },
+            "description": "All fields optional — omit to leave unchanged. Changing `username` also syncs to Keycloak (best-effort after commit)."
+          }
+        },
+        {
+          "name": "Follow User",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{kong}}/v1/users/{{target_user_id}}/follow",
+              "host": ["{{kong}}"],
+              "path": ["v1", "users", "{{target_user_id}}", "follow"]
+            },
+            "description": "Returns `{\"following\": true}`."
+          }
+        },
+        {
+          "name": "Unfollow User",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{kong}}/v1/users/{{target_user_id}}/follow",
+              "host": ["{{kong}}"],
+              "path": ["v1", "users", "{{target_user_id}}", "follow"]
+            },
+            "description": "Returns `{\"following\": false}`."
+          }
+        },
+        {
+          "name": "Get Followers",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{kong}}/v1/users/{{target_user_id}}/followers?limit=20",
+              "host": ["{{kong}}"],
+              "path": ["v1", "users", "{{target_user_id}}", "followers"],
+              "query": [
+                { "key": "limit", "value": "20" },
+                { "key": "cursor", "value": "", "disabled": true, "description": "Cursor from previous page" }
+              ]
+            },
+            "description": "Returns `{\"users\": [...], \"next_cursor\": \"...\" | null}`. Each user includes `is_following` relative to the authenticated viewer."
+          }
+        },
+        {
+          "name": "Get Following",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{kong}}/v1/users/{{target_user_id}}/following?limit=20",
+              "host": ["{{kong}}"],
+              "path": ["v1", "users", "{{target_user_id}}", "following"],
+              "query": [
+                { "key": "limit", "value": "20" },
+                { "key": "cursor", "value": "", "disabled": true, "description": "Cursor from previous page" }
+              ]
+            },
+            "description": "Returns `{\"users\": [...], \"next_cursor\": \"...\" | null}`."
+          }
+        },
+        {
+          "name": "Get Who To Follow Suggestions",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{kong}}/v1/users/suggestions?limit=10",
+              "host": ["{{kong}}"],
+              "path": ["v1", "users", "suggestions"],
+              "query": [
+                { "key": "limit", "value": "10" }
+              ]
+            },
+            "description": "Returns `{\"users\": [...], \"next_cursor\": null}`. Not paginated — call again to reshuffle. Excludes the viewer and accounts they already follow."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Profile Timeline",
+      "item": [
+        {
+          "name": "Get Posts (tweets + retweets)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{kong}}/v1/users/{{target_user_id}}/tweets?limit=20",
+              "host": ["{{kong}}"],
+              "path": ["v1", "users", "{{target_user_id}}", "tweets"],
+              "query": [
+                { "key": "limit", "value": "20" },
+                { "key": "cursor", "value": "", "disabled": true, "description": "Cursor from previous page" }
+              ]
+            },
+            "description": "Returns `{\"items\": [...], \"next_cursor\": \"...\" | null}`. Each item is `{kind: \"tweet\"|\"retweet\", tweet: {...}, retweet?: {id, retweeter, created_at}}`. Ordered newest-first."
+          }
+        },
+        {
+          "name": "Get Replies",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{kong}}/v1/users/{{target_user_id}}/tweets?filter=replies&limit=20",
+              "host": ["{{kong}}"],
+              "path": ["v1", "users", "{{target_user_id}}", "tweets"],
+              "query": [
+                { "key": "filter", "value": "replies" },
+                { "key": "limit", "value": "20" },
+                { "key": "cursor", "value": "", "disabled": true, "description": "Cursor from previous page" }
+              ]
+            },
+            "description": "Returns `{\"items\": [...], \"next_cursor\": \"...\" | null}`. All items have `kind: \"tweet\"` (replies are tweets with `reply_to_id` set)."
+          }
+        },
+        {
+          "name": "Get Media",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{kong}}/v1/users/{{target_user_id}}/tweets?filter=media&limit=20",
+              "host": ["{{kong}}"],
+              "path": ["v1", "users", "{{target_user_id}}", "tweets"],
+              "query": [
+                { "key": "filter", "value": "media" },
+                { "key": "limit", "value": "20" },
+                { "key": "cursor", "value": "", "disabled": true, "description": "Cursor from previous page" }
+              ]
+            },
+            "description": "Tweets/replies that have a `media_id`. Returns `{\"items\": [...], \"next_cursor\": \"...\" | null}`."
+          }
+        },
+        {
+          "name": "Get Likes (owner only)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{kong}}/v1/users/{{user_id}}/likes?limit=20",
+              "host": ["{{kong}}"],
+              "path": ["v1", "users", "{{user_id}}", "likes"],
+              "query": [
+                { "key": "limit", "value": "20" },
+                { "key": "cursor", "value": "", "disabled": true, "description": "Cursor from previous page" }
+              ]
+            },
+            "description": "Returns `{\"items\": [...], \"next_cursor\": \"...\" | null}`. Sorted by like time, not tweet creation. Returns 403 if viewer is not the owner."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Tweets",
+      "item": [
+        {
+          "name": "Create Tweet",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    const b = pm.response.json();",
+                  "    pm.collectionVariables.set('tweet_id', b.id);",
+                  "    pm.test('Status is 201', () => pm.response.to.have.status(201));",
+                  "    pm.test('Tweet ID saved', () => pm.expect(b.id).to.be.a('string').and.match(/^tw_/));",
+                  "    pm.test('Has author object', () => pm.expect(b.author).to.be.an('object'));",
+                  "    pm.test('type is tweet or reply', () => pm.expect(b.type).to.be.oneOf(['tweet', 'reply']));",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"body\": \"Hello #golang world! #microservices\",\n    \"media_id\": null,\n    \"media_url\": null\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{kong}}/v1/tweets",
+              "host": ["{{kong}}"],
+              "path": ["v1", "tweets"]
+            },
+            "description": "Creates an original tweet. Returns the tweet object (201). Either `body` or `media_id` must be non-empty."
+          }
+        },
+        {
+          "name": "Get Tweet",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{kong}}/v1/tweets/{{tweet_id}}",
+              "host": ["{{kong}}"],
+              "path": ["v1", "tweets", "{{tweet_id}}"]
+            },
+            "description": "Returns the tweet object. `is_liked` and `is_retweeted` are relative to the authenticated viewer."
+          }
+        },
+        {
+          "name": "Delete Tweet",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{kong}}/v1/tweets/{{tweet_id}}",
+              "host": ["{{kong}}"],
+              "path": ["v1", "tweets", "{{tweet_id}}"]
+            },
+            "description": "Returns 204 on success. Returns 403 if the caller is not the author."
+          }
+        },
+        {
+          "name": "Like Tweet",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{kong}}/v1/tweets/{{tweet_id}}/like",
+              "host": ["{{kong}}"],
+              "path": ["v1", "tweets", "{{tweet_id}}", "like"]
+            },
+            "description": "Returns `{\"liked\": true}`. Idempotent — safe to call multiple times."
+          }
+        },
+        {
+          "name": "Unlike Tweet",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{kong}}/v1/tweets/{{tweet_id}}/like",
+              "host": ["{{kong}}"],
+              "path": ["v1", "tweets", "{{tweet_id}}", "like"]
+            },
+            "description": "Returns `{\"liked\": false}`."
+          }
+        },
+        {
+          "name": "Retweet",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    const b = pm.response.json();",
+                  "    pm.test('Status is 201', () => pm.response.to.have.status(201));",
+                  "    pm.test('Retweet ID is rt_...', () => pm.expect(b.id).to.match(/^rt_/));",
+                  "    pm.test('Has retweeter', () => pm.expect(b.retweeter).to.be.an('object'));",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{kong}}/v1/tweets/{{tweet_id}}/retweet",
+              "host": ["{{kong}}"],
+              "path": ["v1", "tweets", "{{tweet_id}}", "retweet"]
+            },
+            "description": "Returns `{id: \"rt_...\", retweeter: {...}, created_at}` (201). Returns 409 if already retweeted. The `tweet_id` must be the **original** tweet's ID."
+          }
+        },
+        {
+          "name": "Undo Retweet",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{kong}}/v1/tweets/{{tweet_id}}/retweet",
+              "host": ["{{kong}}"],
+              "path": ["v1", "tweets", "{{tweet_id}}", "retweet"]
+            },
+            "description": "Returns `{\"retweeted\": false}`. The `tweet_id` must be the **original** tweet's ID — never the `rt_...` ID."
+          }
+        },
+        {
+          "name": "Reply to Tweet",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"body\": \"Great point!\",\n    \"media_id\": null,\n    \"media_url\": null\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{kong}}/v1/tweets/{{tweet_id}}/reply",
+              "host": ["{{kong}}"],
+              "path": ["v1", "tweets", "{{tweet_id}}", "reply"]
+            },
+            "description": "Creates a reply. Returns the reply tweet object (201) with `type: \"reply\"` and `reply_to_id` set."
+          }
+        },
+        {
+          "name": "Get Replies",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{kong}}/v1/tweets/{{tweet_id}}/replies?limit=20",
+              "host": ["{{kong}}"],
+              "path": ["v1", "tweets", "{{tweet_id}}", "replies"],
+              "query": [
+                { "key": "limit", "value": "20" },
+                { "key": "cursor", "value": "", "disabled": true, "description": "Cursor from previous page" }
+              ]
+            },
+            "description": "Returns `{\"tweets\": [...], \"next_cursor\": \"tw_...\" | null}`. Ordered oldest-first (thread view)."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Feed",
+      "item": [
+        {
+          "name": "Get Following Feed",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{kong}}/v1/feed/following?limit=20",
+              "host": ["{{kong}}"],
+              "path": ["v1", "feed", "following"],
+              "query": [
+                { "key": "limit", "value": "20" },
+                { "key": "cursor", "value": "", "disabled": true, "description": "Cursor from previous page" }
+              ]
+            },
+            "description": "Returns `{\"items\": [...], \"next_cursor\": \"...\" | null}`. Each item is `{kind: \"tweet\"|\"retweet\", tweet: {...}, retweet?: {id, retweeter, created_at}}`. Enriched from Redis snapshots + one gRPC call for viewer interaction flags."
+          }
+        },
+        {
+          "name": "Get Recommended (For You) Feed",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{kong}}/v1/feed/recommended?limit=20",
+              "host": ["{{kong}}"],
+              "path": ["v1", "feed", "recommended"],
+              "query": [
+                { "key": "limit", "value": "20" },
+                { "key": "cursor", "value": "", "disabled": true, "description": "Cursor from previous page" }
+              ]
+            },
+            "description": "Returns `{\"items\": [...], \"next_cursor\": \"...\" | null}`. Same discriminated union shape as the following feed. Ranked by engagement score + personal interest/affinity signals. Cache TTL 15 min."
+          }
+        },
+        {
+          "name": "Get Trending Hashtags",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{kong}}/v1/feed/trending?limit=10",
+              "host": ["{{kong}}"],
+              "path": ["v1", "feed", "trending"],
+              "query": [
+                { "key": "limit", "value": "10" }
+              ]
+            },
+            "description": "Returns `{\"trending\": [{tag, score}, ...]}`. No auth required. Scores are accumulated event counts; leaderboard resets daily at midnight UTC."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Notifications",
+      "item": [
+        {
+          "name": "Get Notifications",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{kong}}/v1/notifications?limit=20",
+              "host": ["{{kong}}"],
+              "path": ["v1", "notifications"],
+              "query": [
+                { "key": "limit", "value": "20" },
+                { "key": "cursor", "value": "", "disabled": true, "description": "Cursor from previous page" }
+              ]
+            },
+            "description": "Returns `{\"notifications\": [...], \"next_cursor\": \"ntf_...\" | null}`. Types: like | retweet | reply | follow."
+          }
+        },
+        {
+          "name": "Mark All As Read",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('read is true', () => pm.expect(pm.response.json().read).to.be.true);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [],
+            "url": {
+              "raw": "{{kong}}/v1/notifications/read",
+              "host": ["{{kong}}"],
+              "path": ["v1", "notifications", "read"]
+            },
+            "description": "Stamps `read_at` on all unread notifications for the viewer. Returns `{\"read\": true}`."
+          }
+        },
+        {
+          "name": "Mark One As Read",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('read_at is set', () => pm.expect(pm.response.json().read_at).to.not.be.null);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [],
+            "url": {
+              "raw": "{{kong}}/v1/notifications/{{notification_id}}/read",
+              "host": ["{{kong}}"],
+              "path": ["v1", "notifications", "{{notification_id}}", "read"]
+            },
+            "description": "Idempotent — safe to call multiple times. Returns the full notification object with `read_at` set."
+          }
+        },
+        {
+          "name": "Stream (SSE)",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Accept", "value": "text/event-stream" }
+            ],
+            "url": {
+              "raw": "{{kong}}/v1/notifications/stream",
+              "host": ["{{kong}}"],
+              "path": ["v1", "notifications", "stream"]
+            },
+            "description": "Server-Sent Events stream. First event is `count` (unread badge count). Subsequent events are `notification` (new real-time notification). Heartbeat every 30s. Backed by Redis Pub/Sub for multi-pod support."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Media",
+      "item": [
+        {
+          "name": "Get Presigned Upload URL",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    const b = pm.response.json();",
+                  "    pm.collectionVariables.set('media_id', b.media_id);",
+                  "    pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "    pm.test('Upload URL returned', () => pm.expect(b.upload_url).to.be.a('string'));",
+                  "    pm.test('media_id is med_...', () => pm.expect(b.media_id).to.match(/^med_/));",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"content_type\": \"image/jpeg\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{kong}}/v1/media/presign",
+              "host": ["{{kong}}"],
+              "path": ["v1", "media", "presign"]
+            },
+            "description": "Step 1 of the media upload flow. Returns `{media_id, upload_url, public_url, expires_at}`. PUT the file directly to `upload_url`, then pass `media_id` in the tweet body. Presigned URL expires in 15 minutes.\n\nSupported: image/jpeg, image/png, image/gif, image/webp, video/mp4. Max 10 MB."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Search",
+      "item": [
+        {
+          "name": "Search Tweets",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{kong}}/v1/search/tweets?q=golang&limit=20",
+              "host": ["{{kong}}"],
+              "path": ["v1", "search", "tweets"],
+              "query": [
+                { "key": "q", "value": "golang" },
+                { "key": "mode", "value": "hybrid", "description": "keyword | semantic | hybrid (default)" },
+                { "key": "limit", "value": "20" },
+                { "key": "cursor", "value": "", "disabled": true, "description": "Cursor from previous page" }
+              ]
+            },
+            "description": "Returns `{\"tweets\": [...], \"next_cursor\": \"...\" | null}`. Each tweet is fully enriched (author snapshot, counts from Redis, is_liked/is_retweeted for the viewer). Modes: keyword (BM25), semantic (kNN vector), hybrid (default)."
+          }
+        },
+        {
+          "name": "Search Users",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{kong}}/v1/search/users?q=alice&limit=20",
+              "host": ["{{kong}}"],
+              "path": ["v1", "search", "users"],
+              "query": [
+                { "key": "q", "value": "alice" },
+                { "key": "limit", "value": "20" },
+                { "key": "cursor", "value": "", "disabled": true, "description": "Cursor from previous page" }
+              ]
+            },
+            "description": "Returns `{\"users\": [...], \"next_cursor\": \"...\" | null}`. Each user includes `follower_count` and `is_following` relative to the viewer."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "user-service",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{user_svc}}/healthz",
+              "host": ["{{user_svc}}"],
+              "path": ["healthz"]
+            }
+          }
+        },
+        {
+          "name": "tweet-service",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{tweet_svc}}/healthz",
+              "host": ["{{tweet_svc}}"],
+              "path": ["healthz"]
+            }
+          }
+        },
+        {
+          "name": "feed-service",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{feed_svc}}/healthz",
+              "host": ["{{feed_svc}}"],
+              "path": ["healthz"]
+            }
+          }
+        },
+        {
+          "name": "notification-service",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{notification_svc}}/healthz",
+              "host": ["{{notification_svc}}"],
+              "path": ["healthz"]
+            }
+          }
+        },
+        {
+          "name": "media-service",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{media_svc}}/healthz",
+              "host": ["{{media_svc}}"],
+              "path": ["healthz"]
+            }
+          }
+        },
+        {
+          "name": "search-service",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{search_svc}}/healthz",
+              "host": ["{{search_svc}}"],
+              "path": ["healthz"]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

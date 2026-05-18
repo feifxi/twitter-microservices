@@ -1,0 +1,218 @@
+_format_version: "3.0"
+_transform: true
+
+# ── Consumer ───────────────────────────────────────────────────────────────────
+# Kong JWT plugin validates Keycloak-issued RS256 tokens.
+# The consumer key matches the iss claim: http://localhost:8080/realms/twitter
+# KC_HOSTNAME_URL in docker-compose pins this to localhost:8080 so the iss is
+# always consistent regardless of how Keycloak is accessed internally.
+# The rsa_public_key is the public half of the dev RSA key pair embedded in
+# local/keycloak/realm-twitter.json — they must stay in sync.
+consumers:
+  - username: keycloak
+    jwt_secrets:
+      - key: http://localhost:8080/realms/twitter
+        algorithm: RS256
+        secret: unused-for-rsa256
+        rsa_public_key: |
+          -----BEGIN PUBLIC KEY-----
+          MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAnN9nDGr0smN7OgHpkM2X
+          sfKEYV22Pg8gkCKpb+dWi/OQbFJ2pnxZvXUdBgGrQ3wCLeEHb0vbtt8wD4VcjUZT
+          hj1skK1L1risMQyF/ZHCZ8J+l2hyaU244W78/h7CkODCzEJGP+j43hWXCTKma8v0
+          AtEul71jITWzJw81uPYcSAZ80PbevdOmRuAsFQF2kHiPYnMBYA4nq8AR8VT6LYIU
+          ihTjla9qaRjQHMGwVpQfhjP6NUuO90usy85p3YF8U0cSBjMUMomJ1ptFlKEJS+jH
+          qhJaCdAQdM7o9psuUrHrKFYpH0VM5gRcwzcDDWh+kUx5Vk3ahuz8hFJNTb9nzgMX
+          nQIDAQAB
+          -----END PUBLIC KEY-----
+
+# ── Services ───────────────────────────────────────────────────────────────────
+
+services:
+
+  # ── user-service ─────────────────────────────────────────────────────────────
+  - name: user-service
+    url: http://user-service:8080
+    routes:
+      - name: user-protected
+        paths:
+          - /v1/users/
+        methods: [GET, POST, PATCH, DELETE]
+        strip_path: false
+        plugins:
+          - name: jwt
+            config:
+              key_claim_name: iss
+              claims_to_verify:
+                - exp
+          - name: pre-function
+            config:
+              # lua_keycloak: extracts sub/email/preferred_username from the Keycloak
+              # JWT and injects them as X-User-* headers for downstream services.
+              access:
+                - &lua_keycloak |
+                  local auth = kong.request.get_header("Authorization")
+                  if not auth then return end
+                  local token = auth:match("^Bearer%s+(.+)$")
+                  if not token then return end
+                  local payload_b64 = token:match("^[^%.]+%.([^%.]+)%.[^%.]+$")
+                  if not payload_b64 then return end
+                  local b64 = payload_b64:gsub("%-", "+"):gsub("_", "/")
+                  local pad = #b64 % 4
+                  if pad == 2 then b64 = b64 .. "=="
+                  elseif pad == 3 then b64 = b64 .. "=" end
+                  local decoded = ngx.decode_base64(b64)
+                  if not decoded then return end
+                  local function claim(json, key)
+                    return json:match('"' .. key .. '"%s*:%s*"([^"]*)"')
+                  end
+                  local sub = claim(decoded, "sub")
+                  local email = claim(decoded, "email")
+                  local username = claim(decoded, "preferred_username")
+                  if sub then kong.service.request.set_header("X-User-ID", sub) end
+                  if email then kong.service.request.set_header("X-User-Email", email) end
+                  if username then kong.service.request.set_header("X-User-Username", username) end
+
+  # ── tweet-service ─────────────────────────────────────────────────────────────
+  - name: tweet-service
+    url: http://tweet-service:8080
+    routes:
+      - name: tweet-protected
+        paths:
+          - /v1/tweets
+        methods: [GET, POST, DELETE]
+        strip_path: false
+        plugins:
+          - name: jwt
+            config:
+              key_claim_name: iss
+              claims_to_verify:
+                - exp
+          - name: pre-function
+            config:
+              access:
+                - *lua_keycloak
+
+      - name: tweet-user-tweets
+        paths:
+          - ~/v1/users/[^/]+/tweets$
+        methods: [GET]
+        strip_path: false
+        plugins:
+          - name: jwt
+            config:
+              key_claim_name: iss
+              claims_to_verify:
+                - exp
+          - name: pre-function
+            config:
+              access:
+                - *lua_keycloak
+
+      - name: tweet-user-likes
+        paths:
+          - ~/v1/users/[^/]+/likes$
+        methods: [GET]
+        strip_path: false
+        plugins:
+          - name: jwt
+            config:
+              key_claim_name: iss
+              claims_to_verify:
+                - exp
+          - name: pre-function
+            config:
+              access:
+                - *lua_keycloak
+
+
+  # ── feed-service ─────────────────────────────────────────────────────────────
+  - name: feed-service
+    url: http://feed-service:8080
+    routes:
+      # Public: trending hashtags (no auth required)
+      - name: feed-trending-public
+        paths:
+          - /v1/feed/trending
+        methods: [GET]
+        strip_path: false
+
+      # Protected: following and recommended feeds
+      - name: feed-protected
+        paths:
+          - /v1/feed
+        methods: [GET]
+        strip_path: false
+        plugins:
+          - name: jwt
+            config:
+              key_claim_name: iss
+              claims_to_verify:
+                - exp
+          - name: pre-function
+            config:
+              access:
+                - *lua_keycloak
+
+
+  # ── notification-service ─────────────────────────────────────────────────────
+  - name: notification-service
+    url: http://notification-service:8080
+    routes:
+      - name: notification-protected
+        paths:
+          - /v1/notifications
+        methods: [GET, PATCH]
+        strip_path: false
+        plugins:
+          - name: jwt
+            config:
+              key_claim_name: iss
+              claims_to_verify:
+                - exp
+          - name: pre-function
+            config:
+              access:
+                - *lua_keycloak
+
+
+  # ── search-service ───────────────────────────────────────────────────────────
+  - name: search-service
+    url: http://search-service:8080
+    routes:
+      - name: search-protected
+        paths:
+          - /v1/search/
+        methods: [GET]
+        strip_path: false
+        plugins:
+          - name: jwt
+            config:
+              key_claim_name: iss
+              claims_to_verify:
+                - exp
+          - name: pre-function
+            config:
+              access:
+                - *lua_keycloak
+
+
+  # ── media-service ─────────────────────────────────────────────────────────────
+  - name: media-service
+    url: http://media-service:8080
+    routes:
+      - name: media-protected
+        paths:
+          - /v1/media/
+        methods: [GET, POST, DELETE]
+        strip_path: false
+        plugins:
+          - name: jwt
+            config:
+              key_claim_name: iss
+              claims_to_verify:
+                - exp
+          - name: pre-function
+            config:
+              access:
+                - *lua_keycloak
+

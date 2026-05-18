@@ -1,0 +1,231 @@
+{
+  "realm": "twitter",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": true,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": true,
+  "editUsernameAllowed": true,
+  "accessTokenLifespan": 900,
+  "ssoSessionMaxLifespan": 36000,
+  "components": {
+    "org.keycloak.keys.KeyProvider": [
+      {
+        "id": "dev-rsa-key",
+        "name": "dev-rsa-key",
+        "providerId": "rsa",
+        "subComponents": {},
+        "config": {
+          "privateKey": ["MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCc32cMavSyY3s6AemQzZex8oRhXbY+DyCQIqlv51aL85BsUnamfFm9dR0GAatDfAIt4QdvS9u23zAPhVyNRlOGPWyQrUvWuKwxDIX9kcJnwn6XaHJpTbjhbvz+HsKQ4MLMQkY/6PjeFZcJMqZry/QC0S6XvWMhNbMnDzW49hxIBnzQ9t6906ZG4CwVAXaQeI9icwFgDierwBHxVPotghSKFOOVr2ppGNAcwbBWlB+GM/o1S473S6zLzmndgXxTRxIGMxQyiYnWm0WUoQlL6MeqEloJ0BB0zuj2my5SsesoVikfRUzmBFzDNwMNaH6RTHlWTdqG7PyEUk1Nv2fOAxedAgMBAAECggEALyq4uDIcetqQfYN/r6sxVi6+AOyFVCmGN/BEE8Jx8kh8fyVYSXyQGvfwjxLHZNYPba4AZ0VevaBjufb2OgAQMwea8fE5IUmLdH/4daJy2nHPUET2SZU15opRhTLIe3ko+PNgXez1jwjczcYt5bGAH6y3nqYx/RVBVZgsJf3RyRG5Mzq2h5GHparyCRoDIvxmgidZ41nZDBi7hu0fqrIhq/fqCqAynxW9AhHt0RXCd/vv0X1cfDhiKaIrdd39jfcfVb43KoyD9mtItvMrucApTtY7S6LtwYHsSGfal2Iu6sAxJP5KCmKL9fnLzA7J5pjgA2KrgSd9duOuInF9WCJO/QKBgQDdKwsy/+cMb95qLbeXkIu4Z5VpjVpkDJhtOLou55sZJK1AdxVSus8yC2Yo2CaU69RlbnYFTYGxypl3mBYY9il9RJfShY/OyB7PIhtxVYEoAI6doaVBhNBuFnej4kOCEQvqZfBkokGvSQlQKyTzKPjJhQYa15987DF1aT+B80JkZwKBgQC1lB+JXMWmNJCarl8iolbo9AICDzh7Pv5jDYkUKI6LEbfY7IDLapIOu9JM2Xc52bPITxaFriSUQPPRcNuNZ7vhUVNgA6JAXVDwYjtZxcqlJQgvEp1MZ6oC2sjVUeC+9BgjPod4YpGn3v8nGIkGObCbo1vmdD4sWhq5VayuybMBWwKBgCtm8AqxF2lkZrRVhmrS7ehhQ3v0RmHN6ve8IyVjRBeaD/nPpLqYeGKsw/6N9HxTD1pcZALEZAg85wMGMIfzfs7bcCPbHA6LTSh+2/3Qtsjf2xzqBOEnrDN+azoZBAB5UepM2PEWumcooRA/dz/UsYXyefE4kU7VlxsgbVsWHthPAoGBAJnxwicIY339NNgfnALWFc8dCRLL6rv69VvvXtebZvabB/6+zJcpfDlHng2PldiTLSxXeSXPNa4Hv29DOrERUKW/+Gr/ybC+LOAQuHbtDVikI+Mc6gWcIfSXnwvUhjH+6vP+kIZNM2Za1oJD9/AyOvxJLKIezZN2tQ+KhoQN91jfAoGAY0GEHvtZOkUxL6lVMBX5W19gFbHqHfs8q+uyk2eTWlsgYYntKmJjW8DgCIE6DzIDs4dFW46YBrCafazrpwYQXme3WdsN0DeFZG72G0Hc9KbDacj2i/LU0aQYVrQMG4Sk6V1RnWQmAXKZ8vdEbjoICcniQh+chKnczQPQUFRbX1Q="],
+          "certificate": ["MIIDDzCCAfegAwIBAgIUcsAEfi3SakxfqqnJaMt//wtiIXUwDQYJKoZIhvcNAQELBQAwFzEVMBMGA1UEAwwMZGV2LWtleWNsb2FrMB4XDTI2MDUwMTEyMTU0NloXDTM2MDQyODEyMTU0NlowFzEVMBMGA1UEAwwMZGV2LWtleWNsb2FrMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAnN9nDGr0smN7OgHpkM2XsfKEYV22Pg8gkCKpb+dWi/OQbFJ2pnxZvXUdBgGrQ3wCLeEHb0vbtt8wD4VcjUZThj1skK1L1risMQyF/ZHCZ8J+l2hyaU244W78/h7CkODCzEJGP+j43hWXCTKma8v0AtEul71jITWzJw81uPYcSAZ80PbevdOmRuAsFQF2kHiPYnMBYA4nq8AR8VT6LYIUihTjla9qaRjQHMGwVpQfhjP6NUuO90usy85p3YF8U0cSBjMUMomJ1ptFlKEJS+jHqhJaCdAQdM7o9psuUrHrKFYpH0VM5gRcwzcDDWh+kUx5Vk3ahuz8hFJNTb9nzgMXnQIDAQABo1MwUTAdBgNVHQ4EFgQUMCg/hZxiBCmMVovknBa2GwSg6JgwHwYDVR0jBBgwFoAUMCg/hZxiBCmMVovknBa2GwSg6JgwDwYDVR0TAQH/BAUwAwEB/zANBgkqhkiG9w0BAQsFAAOCAQEAjFY/rYKvv1rMR0E/QrfQAY35G/Hvuoe6SPQ4YUuMOlrhURK6BJNwcgWaS9TbpCi9A/5GrgOwEl7Z+QBjvMknMxU5i3UV5AJWO0vJtqfXkWF1fZZIycP0pe9YCxjRNC5wYKSWThcTmHDmEDyEaB6+JIC/jPSLV4C9dngW8YHtqjcJp0n5uqTDWCW3NUXrndcKoN1+tmRa40OkWGqJrU213Jc5jxJ7Y185RbP02wS9MRmY4jqh8wl1HoO1ATof53n0NtMd2n1lzM0hhMuDbZs9r+CTgMpiN4wiwDZB/Eil1YoJhfQVPVKhBQXwkaxNSL/1QtbFVQlzWq1c89bwNWEaxQ=="],
+          "priority": ["100"],
+          "enabled": ["true"],
+          "active": ["true"],
+          "algorithm": ["RS256"]
+        }
+      }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "twitter-app",
+      "name": "Twitter Clone Frontend",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "redirectUris": ["*"],
+      "webOrigins": ["*"]
+    },
+    {
+      "clientId": "kong-admin",
+      "name": "Kong Admin (user-service)",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "${KEYCLOAK_ADMIN_CLIENT_SECRET}",
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true
+    }
+  ],
+  "identityProviders": [
+    {
+      "alias": "google",
+      "displayName": "Google",
+      "providerId": "google",
+      "enabled": true,
+      "trustEmail": true,
+      "storeToken": false,
+      "addReadTokenRoleOnCreate": false,
+      "authenticateByDefault": false,
+      "linkOnly": false,
+      "firstBrokerLoginFlowAlias": "first broker login",
+      "config": {
+        "clientId": "${GOOGLE_CLIENT_ID}",
+        "clientSecret": "${GOOGLE_CLIENT_SECRET}",
+        "syncMode": "IMPORT",
+        "useJwksUrl": "true",
+        "defaultScope": "openid email profile"
+      }
+    }
+  ],
+  "authenticationFlows": [
+    {
+      "alias": "first broker login",
+      "description": "Actions taken after first broker login with Identity Provider account, which is not yet linked to any Keycloak account",
+      "providerId": "basic-flow",
+      "topLevel": true,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "authenticator": "idp-review-profile",
+          "authenticatorConfig": "review profile config",
+          "requirement": "DISABLED",
+          "priority": 10,
+          "autheticatorFlow": false,
+          "userSetupAllowed": false
+        },
+        {
+          "flowAlias": "User creation or linking",
+          "requirement": "REQUIRED",
+          "priority": 20,
+          "autheticatorFlow": true,
+          "userSetupAllowed": false
+        }
+      ]
+    },
+    {
+      "alias": "User creation or linking",
+      "description": "Flow for the existing/non-existing user alternatives in first broker login",
+      "providerId": "basic-flow",
+      "topLevel": false,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "authenticator": "idp-create-user-if-unique",
+          "authenticatorConfig": "create unique user config",
+          "requirement": "ALTERNATIVE",
+          "priority": 10,
+          "autheticatorFlow": false,
+          "userSetupAllowed": false
+        },
+        {
+          "flowAlias": "Handle Existing Account",
+          "requirement": "ALTERNATIVE",
+          "priority": 20,
+          "autheticatorFlow": true,
+          "userSetupAllowed": false
+        }
+      ]
+    },
+    {
+      "alias": "Handle Existing Account",
+      "description": "Handle what to do if there is existing account with same email/username as authenticated identity provider user",
+      "providerId": "basic-flow",
+      "topLevel": false,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "authenticator": "idp-confirm-link",
+          "requirement": "REQUIRED",
+          "priority": 10,
+          "autheticatorFlow": false,
+          "userSetupAllowed": false
+        },
+        {
+          "flowAlias": "Account verification options",
+          "requirement": "REQUIRED",
+          "priority": 20,
+          "autheticatorFlow": true,
+          "userSetupAllowed": false
+        }
+      ]
+    },
+    {
+      "alias": "Account verification options",
+      "description": "Method with which to verify the existing account",
+      "providerId": "basic-flow",
+      "topLevel": false,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "authenticator": "idp-email-verification",
+          "requirement": "ALTERNATIVE",
+          "priority": 10,
+          "autheticatorFlow": false,
+          "userSetupAllowed": false
+        },
+        {
+          "flowAlias": "Verify Existing Account by Re-authentication",
+          "requirement": "ALTERNATIVE",
+          "priority": 20,
+          "autheticatorFlow": true,
+          "userSetupAllowed": false
+        }
+      ]
+    },
+    {
+      "alias": "Verify Existing Account by Re-authentication",
+      "description": "Reauthentication of existing account",
+      "providerId": "basic-flow",
+      "topLevel": false,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "authenticator": "idp-username-password-form",
+          "requirement": "REQUIRED",
+          "priority": 10,
+          "autheticatorFlow": false,
+          "userSetupAllowed": false
+        },
+        {
+          "authenticator": "auth-otp-form",
+          "requirement": "OPTIONAL",
+          "priority": 20,
+          "autheticatorFlow": false,
+          "userSetupAllowed": false
+        }
+      ]
+    }
+  ],
+  "authenticatorConfig": [
+    {
+      "alias": "review profile config",
+      "config": {
+        "update.profile.on.first.login": "off"
+      }
+    },
+    {
+      "alias": "create unique user config",
+      "config": {
+        "require.password.update.after.registration": "false"
+      }
+    }
+  ],
+  "requiredActions": [
+    {
+      "alias": "PROVISION_USER",
+      "name": "Provision user in user-service",
+      "providerId": "PROVISION_USER",
+      "enabled": true,
+      "defaultAction": false,
+      "priority": 0,
+      "config": {}
+    }
+  ],
+  "roles": {
+    "realm": [],
+    "client": {}
+  },
+  "users": [
+    {
+      "username": "service-account-kong-admin",
+      "enabled": true,
+      "serviceAccountClientId": "kong-admin",
+      "clientRoles": {
+        "realm-management": ["manage-users", "view-users", "query-users"]
+      }
+    }
+  ]
+}

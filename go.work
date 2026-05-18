@@ -1,0 +1,12 @@
+go 1.26
+
+use (
+	./apps/dlq-replay
+	./apps/feed-service
+	./apps/media-service
+	./apps/notification-service
+	./apps/search-service
+	./apps/shared
+	./apps/tweet-service
+	./apps/user-service
+)

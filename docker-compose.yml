@@ -1,0 +1,409 @@
+services:
+
+  # ── Backing stores ──────────────────────────────────────────────────────
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./local/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Redpanda: Kafka-compatible, single binary, no JVM
+  redpanda:
+    image: redpandadata/redpanda:v23.3.11
+    command:
+      - redpanda
+      - start
+      - --smp=1
+      - --memory=512M
+      - --overprovisioned
+      - --kafka-addr=PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr=PLAINTEXT://redpanda:9092
+      - --pandaproxy-addr=0.0.0.0:8082
+      - --schema-registry-addr=0.0.0.0:8081
+    ports:
+      - "9092:9092"
+      - "8081:8081"
+      - "8082:8082"
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy'"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+
+  # Creates all Kafka topics explicitly after Redpanda is healthy.
+  redpanda-init:
+    image: redpandadata/redpanda:v23.3.11
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        rpk topic create tweet.created tweet.deleted tweet.liked tweet.retweeted tweet.replied user.created user.followed user.updated media.uploaded notification-service-cg.dlq feed-service-cg.dlq search-service-cg.dlq -X brokers=redpanda:9092 || true
+    restart: "no"
+
+  # Redpanda Console (UI for inspecting topics/messages locally)
+  redpanda-console:
+    image: redpandadata/console:v2.4.5
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKERS: redpanda:9092
+    ports:
+      - "8089:8080"
+
+  # LocalStack: S3-compatible for local media uploads
+  localstack:
+    image: localstack/localstack:3.3
+    environment:
+      SERVICES: s3
+      DEFAULT_REGION: ${AWS_REGION}
+    ports:
+      - "4566:4566"
+    volumes:
+      - ./local/localstack/init:/etc/localstack/init/ready.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "awslocal s3 ls s3://twitter-media || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+
+  # OpenSearch: search + vector store (matches Amazon OpenSearch Service 3.5)
+  opensearch:
+    image: opensearchproject/opensearch:3.5.0
+    environment:
+      - OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m
+    volumes:
+      - ./local/opensearch/opensearch.yml:/usr/share/opensearch/config/opensearch.yml:ro
+    ports:
+      - "9200:9200"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health | grep -qE '\"status\":\"(green|yellow)\"'"]
+      interval: 10s
+      timeout: 10s
+      retries: 15
+      start_period: 30s
+
+  # Kong API Gateway (DB-less, declarative config)
+  kong:
+    image: kong:3.6
+    environment:
+      KONG_DATABASE: "off"
+      KONG_DECLARATIVE_CONFIG: /kong/kong.yaml
+      KONG_PROXY_ACCESS_LOG: /dev/stdout
+      KONG_ADMIN_ACCESS_LOG: /dev/stdout
+      KONG_PROXY_ERROR_LOG: /dev/stderr
+      KONG_ADMIN_ERROR_LOG: /dev/stderr
+      KONG_ADMIN_LISTEN: "0.0.0.0:8001"
+      KONG_UNTRUSTED_LUA_SANDBOX_REQUIRES: resty.redis
+    ports:
+      - "8000:8000"   # proxy — all client traffic goes here
+      - "8100:8001"   # admin API
+    volumes:
+      - ./local/kong:/kong:ro
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "kong", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Keycloak: self-hosted IAM for authentication (email/pw + Google OIDC)
+  # Builds the Provision User SPI JAR into the keycloak_providers volume.
+  # Re-run `docker compose up --build keycloak-spi-builder` after SPI changes.
+  keycloak-spi-builder:
+    image: maven:3.9-eclipse-temurin-17
+    working_dir: /build
+    volumes:
+      - ./local/keycloak-spi:/build
+      - keycloak_providers:/output
+      - maven_cache:/root/.m2
+    command: >
+      sh -c "mvn package -q -DskipTests && cp target/keycloak-provision-spi.jar /output/"
+
+  # Realm is auto-imported from local/keycloak/realm-twitter.json on first start.
+  # That file is rendered from realm-twitter.template.json by `make keycloak/render`
+  # using values from the root .env (GOOGLE_CLIENT_ID etc.). Admin UI on :8080.
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.6.1
+    command: start-dev --import-realm
+    environment:
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+      KC_HTTP_PORT: "8080"
+      KC_HEALTH_ENABLED: "true"
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: ${POSTGRES_USER}
+      KC_DB_PASSWORD: ${POSTGRES_PASSWORD}
+      USER_SERVICE_URL: http://user-service:8080
+      SERVICE_TOKEN: ${SERVICE_TOKEN}
+    volumes:
+      # Mount only the RENDERED realm file — not the whole local/keycloak dir,
+      # which also contains the template (with literal ${...} placeholders that
+      # Keycloak would happily import as-is, breaking the Google IdP).
+      - ./local/keycloak/realm-twitter.json:/opt/keycloak/data/import/realm-twitter.json:ro
+      - keycloak_providers:/opt/keycloak/providers:ro
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      keycloak-spi-builder:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/9000 && printf 'GET /health/ready HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && grep -q UP <&3"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
+
+ # ── Observability ───────────────────────────────────────────────────────
+
+  # Jaeger all-in-one: receives OTLP gRPC traces and serves the Jaeger UI.
+  jaeger:
+    image: jaegertracing/all-in-one:1.62.0
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"   # Jaeger UI
+      - "4317:4317"     # OTLP gRPC receiver
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:14269/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Prometheus: scrapes /metrics from every service.
+  prometheus:
+    image: prom/prometheus:v3.3.1
+    volumes:
+      - ./local/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9090/-/healthy || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Microservices ────────────────────────────────────────────────────────
+
+  user-service:
+    build:
+      context: .
+      dockerfile: apps/user-service/Dockerfile
+    ports:
+      - "8001:8080"
+      - "9001:9090"   # gRPC — internal only, exposed for local debugging
+    environment:
+      PORT: "8080"
+      GRPC_PORT: "9090"
+      LOG_LEVEL: debug
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable&search_path=users
+      MIGRATIONS_TABLE: user_migrations
+      KAFKA_BROKERS: redpanda:9092
+      SERVICE_TOKEN: ${SERVICE_TOKEN}
+      KEYCLOAK_BASE_URL: http://keycloak:8080
+      KEYCLOAK_REALM: twitter
+      KEYCLOAK_ADMIN_CLIENT_ID: ${KEYCLOAK_ADMIN_CLIENT_ID}
+      KEYCLOAK_ADMIN_CLIENT_SECRET: ${KEYCLOAK_ADMIN_CLIENT_SECRET}
+      OTEL_EXPORTER_OTLP_ENDPOINT: jaeger:4317
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redpanda-init:
+        condition: service_completed_successfully
+      keycloak:
+        condition: service_healthy
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  tweet-service:
+    build:
+      context: .
+      dockerfile: apps/tweet-service/Dockerfile
+    ports:
+      - "8002:8080"
+      - "9002:9090"   # gRPC — internal only, exposed for local debugging
+    environment:
+      PORT: "8080"
+      GRPC_PORT: "9090"
+      LOG_LEVEL: debug
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable&search_path=tweet
+      MIGRATIONS_TABLE: tweet_migrations
+      KAFKA_BROKERS: redpanda:9092
+      USER_SERVICE_GRPC_ADDR: user-service:9090
+      SERVICE_TOKEN: ${SERVICE_TOKEN}
+      REDIS_URL: redis:6379
+      OTEL_EXPORTER_OTLP_ENDPOINT: jaeger:4317
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      redpanda-init:
+        condition: service_completed_successfully
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  feed-service:
+    build:
+      context: .
+      dockerfile: apps/feed-service/Dockerfile
+    ports:
+      - "8003:8080"
+    environment:
+      PORT: "8080"
+      LOG_LEVEL: debug
+      REDIS_URL: redis:6379
+      KAFKA_BROKERS: redpanda:9092
+      USER_SERVICE_GRPC_ADDR: user-service:9090
+      TWEET_SERVICE_GRPC_ADDR: tweet-service:9090
+      SERVICE_TOKEN: ${SERVICE_TOKEN}
+      OTEL_EXPORTER_OTLP_ENDPOINT: jaeger:4317
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      redpanda-init:
+        condition: service_completed_successfully
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  notification-service:
+    build:
+      context: .
+      dockerfile: apps/notification-service/Dockerfile
+    ports:
+      - "8004:8080"
+    environment:
+      PORT: "8080"
+      LOG_LEVEL: debug
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable&search_path=notification
+      MIGRATIONS_TABLE: notification_migrations
+      REDIS_URL: redis:6379
+      KAFKA_BROKERS: redpanda:9092
+      SERVICE_TOKEN: ${SERVICE_TOKEN}
+      OTEL_EXPORTER_OTLP_ENDPOINT: jaeger:4317
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      redpanda-init:
+        condition: service_completed_successfully
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  media-service:
+    build:
+      context: .
+      dockerfile: apps/media-service/Dockerfile
+    ports:
+      - "8005:8080"
+    environment:
+      PORT: "8080"
+      LOG_LEVEL: debug
+      AWS_ENDPOINT_URL: http://localstack:4566
+      AWS_S3_PRESIGN_ENDPOINT_URL: http://localhost:4566
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_REGION: ${AWS_REGION}
+      S3_BUCKET: twitter-media
+      MEDIA_PUBLIC_URL_BASE: http://localhost:4566/twitter-media
+      OTEL_EXPORTER_OTLP_ENDPOINT: jaeger:4317
+    depends_on:
+      localstack:
+        condition: service_healthy
+    mem_limit: 128m
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  search-service:
+    build:
+      context: .
+      dockerfile: apps/search-service/Dockerfile
+    ports:
+      - "8006:8080"
+    environment:
+      PORT: "8080"
+      LOG_LEVEL: debug
+      OPENSEARCH_URL: http://opensearch:9200
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_EMBEDDING_MODEL: text-embedding-3-small
+      KAFKA_BROKERS: redpanda:9092
+      REDIS_URL: redis:6379
+      USER_SERVICE_GRPC_ADDR: user-service:9090
+      TWEET_SERVICE_GRPC_ADDR: tweet-service:9090
+      SERVICE_TOKEN: ${SERVICE_TOKEN}
+      OTEL_EXPORTER_OTLP_ENDPOINT: jaeger:4317
+    depends_on:
+      opensearch:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      redpanda-init:
+        condition: service_completed_successfully
+      user-service:
+        condition: service_healthy
+      tweet-service:
+        condition: service_healthy
+    mem_limit: 128m
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+  keycloak_providers:
+  maven_cache:

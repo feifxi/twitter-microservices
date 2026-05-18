@@ -1,0 +1,73 @@
+syntax = "proto3";
+
+package tweet.v1;
+
+option go_package = "github.com/twitter/shared/proto/gen/tweet/v1;tweetv1";
+
+// TweetInternal is called only by other services (not exposed via Kong).
+service TweetInternal {
+  rpc GetTweet(GetTweetRequest) returns (GetTweetResponse);
+  rpc GetTweetsByAuthor(GetTweetsByAuthorRequest) returns (GetTweetsByAuthorResponse);
+  rpc GetRecentPopularTweets(GetRecentPopularTweetsRequest) returns (GetRecentPopularTweetsResponse);
+  // GetInteractions returns viewer-specific liked/retweeted flags for a batch of tweet IDs.
+  // Counts are NOT included — they come from Redis tweet:counts:{id}.
+  rpc GetInteractions(GetInteractionsRequest) returns (GetInteractionsResponse);
+}
+
+message GetTweetRequest {
+  string tweet_id  = 1;
+  string viewer_id = 2; // optional; when set, response includes is_liked / is_retweeted
+}
+
+message GetTweetResponse {
+  bool  found = 1; // false when tweet has been deleted
+  Tweet tweet = 2;
+}
+
+message GetTweetsByAuthorRequest {
+  string author_id = 1;
+  int32  limit     = 2;
+}
+
+message GetTweetsByAuthorResponse {
+  repeated Tweet tweets = 1;
+}
+
+message GetRecentPopularTweetsRequest {
+  int32 limit = 1;
+}
+
+message GetRecentPopularTweetsResponse {
+  repeated Tweet tweets = 1;
+}
+
+message GetInteractionsRequest {
+  string          viewer_id = 1;
+  repeated string tweet_ids = 2;
+}
+
+message TweetInteraction {
+  bool is_liked     = 1;
+  bool is_retweeted = 2;
+}
+
+message GetInteractionsResponse {
+  map<string, TweetInteraction> interactions = 1; // keyed by tweet_id
+}
+
+message Tweet {
+  string          id            = 1;
+  string          author_id     = 2;
+  string          body          = 3;
+  reserved 4;                            // formerly retweet_of_id — retweets are now reference-only
+  reserved "retweet_of_id";
+  string          media_id      = 5; // empty string when no media
+  int32           like_count    = 6;
+  int32           retweet_count = 7;
+  int32           reply_count   = 8;
+  repeated string hashtags      = 9;
+  int64           created_at    = 10; // Unix timestamp (seconds)
+  string          reply_to_id   = 11; // empty string when not a reply
+  bool            is_liked      = 12; // only meaningful when viewer_id is set in request
+  bool            is_retweeted  = 13; // only meaningful when viewer_id is set in request
+}

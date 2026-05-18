@@ -1,0 +1,45 @@
+package logger
+
+import (
+	"context"
+	"log/slog"
+	"os"
+
+	"go.opentelemetry.io/otel/trace"
+)
+
+// Injects OTel trace_id and span_id into every log record that carries an active span.
+func New(service string) *slog.Logger {
+	level := slog.LevelInfo
+	if os.Getenv("LOG_LEVEL") == "debug" {
+		level = slog.LevelDebug
+	}
+
+	base := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level})
+	return slog.New(&traceHandler{Handler: base}).With(
+		slog.String("service", service),
+		slog.String("version", os.Getenv("IMAGE_TAG")),
+	)
+}
+
+type traceHandler struct {
+	slog.Handler
+}
+
+func (h *traceHandler) Handle(ctx context.Context, r slog.Record) error {
+	if sc := trace.SpanFromContext(ctx).SpanContext(); sc.IsValid() {
+		r.AddAttrs(
+			slog.String("trace_id", sc.TraceID().String()),
+			slog.String("span_id", sc.SpanID().String()),
+		)
+	}
+	return h.Handler.Handle(ctx, r)
+}
+
+func (h *traceHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return &traceHandler{Handler: h.Handler.WithAttrs(attrs)}
+}
+
+func (h *traceHandler) WithGroup(name string) slog.Handler {
+	return &traceHandler{Handler: h.Handler.WithGroup(name)}
+}
