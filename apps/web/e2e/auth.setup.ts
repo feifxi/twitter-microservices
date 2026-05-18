@@ -1,242 +1,126 @@
-import { request, test as setup } from "@playwright/test";
+import type { APIResponse } from "@playwright/test";
+import { test as setup } from "@playwright/test";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+
+const KEYCLOAK = "http://localhost:8080";
+const KONG = "http://localhost:8000";
+const USER_SVC = "http://localhost:8001";
+const REALM = "twitter";
+const CLIENT_ID = "twitter-app";
+
+const TEST = {
+	username: "playwright-e2e",
+	email: "playwright-e2e@test.local",
+	password: "Playwright-E2E-Passw0rd!",
+	displayName: "Playwright E2E",
+};
 
 const AUTH_FILE = path.join(__dirname, "..", "playwright", ".auth", "user.json");
 
-// Keycloak URL must match the issuer Kong validates against
-// (http://localhost:8080/realms/twitter) — see local/kong/kong.yaml.
-const APP_URL = process.env.E2E_APP_URL ?? "http://localhost:3000";
-const KEYCLOAK_URL = process.env.E2E_KEYCLOAK_URL ?? "http://localhost:8080";
-const REALM = "twitter";
-const APP_CLIENT_ID = "twitter-app";
-const ADMIN_USER = process.env.E2E_KC_ADMIN ?? "admin";
-const ADMIN_PASSWORD = process.env.E2E_KC_ADMIN_PASSWORD ?? "admin";
+setup("authenticate test user", async ({ request: api }) => {
+	const serviceToken = process.env.SERVICE_TOKEN;
+	if (!serviceToken) throw new Error("SERVICE_TOKEN required — run via `make test-e2e`.");
 
-const USER_SERVICE_URL = process.env.E2E_USER_SERVICE_URL ?? "http://localhost:8001";
-const KONG_URL = process.env.E2E_KONG_URL ?? "http://localhost:8000";
-const SERVICE_TOKEN = process.env.SERVICE_TOKEN;
+	// 1. Admin token via direct grant against master.
+	const admin = await grant("master", "admin-cli", "admin", "admin");
+	const auth = { authorization: `Bearer ${admin.access_token}` };
+	const json = { ...auth, "content-type": "application/json" };
 
-// Stable test identity. Same on every run — Keycloak + user-service creation
-// is idempotent. The unique-per-run state (hashtag, body) lives in the spec.
-const TEST_USERNAME = "playwright-e2e";
-const TEST_EMAIL = "playwright-e2e@test.local";
-const TEST_PASSWORD = "Playwright-E2E-Passw0rd!";
-const TEST_DISPLAY_NAME = "Playwright E2E";
+	// 2. Allow unmanaged user attributes. Keycloak 26 blocks them by default;
+	// the ProvisionUser SPI's `provisioned` attribute is how we mark the
+	// account set up so direct-grant doesn't 400 with "Account is not fully
+	// set up" on every login.
+	await mustOk(api.put(`${KEYCLOAK}/admin/realms/${REALM}/users/profile`, {
+		headers: json, data: { unmanagedAttributePolicy: "ENABLED" },
+	}), "enable unmanaged attrs");
 
-setup("authenticate test user", async () => {
-	if (!SERVICE_TOKEN) {
-		throw new Error(
-			"SERVICE_TOKEN env var is required — run `make test-e2e` so .env is sourced.",
-		);
+	// 3. Upsert test user, then patch attrs + clear required actions.
+	let userId = await findUserId();
+	if (!userId) {
+		await createUser();
+		userId = await findUserId();
+		if (!userId) throw new Error("user not found after create");
 	}
-
-	const api = await request.newContext();
-
-	const adminToken = await directGrant(api, "master", "admin-cli", ADMIN_USER, ADMIN_PASSWORD);
-	await enableUnmanagedAttributes(api, adminToken);
-	const userId = await upsertKeycloakUser(api, adminToken);
-	await provisionInUserService(api, userId);
-	const tokens = await directGrant(api, REALM, APP_CLIENT_ID, TEST_USERNAME, TEST_PASSWORD, true);
-	await ensureUsername(api, tokens.access_token);
-
-	// Mirror what the /api/auth/callback handler sets — same names, same flags.
-	const appOrigin = new URL(APP_URL);
-	const cookies = [
-		cookie("access_token", tokens.access_token, appOrigin),
-		cookie("refresh_token", tokens.refresh_token, appOrigin),
-		cookie("id_token", tokens.id_token, appOrigin),
-	];
-
-	const ctx = await request.newContext();
-	await ctx.storageState({ path: AUTH_FILE });
-	// storageState writes an empty cookies array — patch it in. Playwright's
-	// addCookies requires a browser context, so we hand-write the file.
-	const fs = await import("node:fs/promises");
-	const state = JSON.parse(await fs.readFile(AUTH_FILE, "utf8"));
-	state.cookies = cookies;
-	await fs.writeFile(AUTH_FILE, JSON.stringify(state, null, 2));
-});
-
-function cookie(name: string, value: string, origin: URL) {
-	return {
-		name,
-		value,
-		domain: origin.hostname,
-		path: "/",
-		httpOnly: true,
-		secure: origin.protocol === "https:",
-		sameSite: "Lax" as const,
-		expires: -1,
-	};
-}
-
-interface TokenSet {
-	access_token: string;
-	refresh_token: string;
-	id_token: string;
-}
-
-async function directGrant(
-	api: Awaited<ReturnType<typeof request.newContext>>,
-	realm: string,
-	clientId: string,
-	username: string,
-	password: string,
-	withIdToken = false,
-): Promise<TokenSet> {
-	const params = new URLSearchParams({
-		grant_type: "password",
-		client_id: clientId,
-		username,
-		password,
-	});
-	if (withIdToken) params.set("scope", "openid");
-	const res = await api.post(
-		`${KEYCLOAK_URL}/realms/${realm}/protocol/openid-connect/token`,
-		{
-			headers: { "content-type": "application/x-www-form-urlencoded" },
-			data: params.toString(),
-		},
-	);
-	if (!res.ok()) {
-		throw new Error(`direct grant ${realm}/${clientId}/${username}: ${res.status()} ${await res.text()}`);
-	}
-	return res.json();
-}
-
-// Keycloak 26 ships with declarative user profile enabled and unmanaged
-// attributes blocked. The ProvisionUser SPI relies on a `provisioned`
-// attribute to avoid re-firing the required action on every login — without
-// this flip, the attribute silently no-ops and direct-grant always 400s with
-// "Account is not fully set up". Idempotent.
-async function enableUnmanagedAttributes(
-	api: Awaited<ReturnType<typeof request.newContext>>,
-	adminToken: TokenSet,
-) {
-	const headers = { authorization: `Bearer ${adminToken.access_token}` };
-	const cur = await api.get(`${KEYCLOAK_URL}/admin/realms/${REALM}/users/profile`, { headers });
-	if (!cur.ok()) {
-		throw new Error(`get user profile config: ${cur.status()} ${await cur.text()}`);
-	}
-	const profile = (await cur.json()) as { unmanagedAttributePolicy?: string };
-	if (profile.unmanagedAttributePolicy === "ENABLED") return;
-	const put = await api.put(`${KEYCLOAK_URL}/admin/realms/${REALM}/users/profile`, {
-		headers: { ...headers, "content-type": "application/json" },
-		data: { ...profile, unmanagedAttributePolicy: "ENABLED" },
-	});
-	if (!put.ok()) {
-		throw new Error(`enable unmanaged attributes: ${put.status()} ${await put.text()}`);
-	}
-}
-
-async function upsertKeycloakUser(
-	api: Awaited<ReturnType<typeof request.newContext>>,
-	adminToken: TokenSet,
-): Promise<string> {
-	const headers = { authorization: `Bearer ${adminToken.access_token}` };
-	const lookup = await api.get(
-		`${KEYCLOAK_URL}/admin/realms/${REALM}/users?username=${TEST_USERNAME}&exact=true`,
-		{ headers },
-	);
-	if (!lookup.ok()) {
-		throw new Error(`lookup user: ${lookup.status()} ${await lookup.text()}`);
-	}
-	const existing = (await lookup.json()) as Array<{ id: string }>;
-
-	let id: string;
-	if (existing.length > 0) {
-		id = existing[0].id;
-	} else {
-		const create = await api.post(`${KEYCLOAK_URL}/admin/realms/${REALM}/users`, {
-			headers: { ...headers, "content-type": "application/json" },
-			data: {
-				username: TEST_USERNAME,
-				email: TEST_EMAIL,
-				firstName: "Playwright",
-				lastName: "E2E",
-				enabled: true,
-				emailVerified: true,
-				credentials: [{ type: "password", value: TEST_PASSWORD, temporary: false }],
-			},
-		});
-		if (!create.ok() && create.status() !== 409) {
-			throw new Error(`create user: ${create.status()} ${await create.text()}`);
-		}
-		const after = await api.get(
-			`${KEYCLOAK_URL}/admin/realms/${REALM}/users?username=${TEST_USERNAME}&exact=true`,
-			{ headers },
-		);
-		const users = (await after.json()) as Array<{ id: string }>;
-		if (users.length === 0) throw new Error("user not found after create");
-		id = users[0].id;
-	}
-
-	// Always clear required actions and set the provisioned attribute — the
-	// ProvisionUser SPI's evaluateTriggers re-adds PROVISION_USER on every
-	// auth unless attributes.provisioned == "true". Our setup POSTs to
-	// /internal/provision directly, so the interactive challenge is unwanted.
-	const update = await api.put(`${KEYCLOAK_URL}/admin/realms/${REALM}/users/${id}`, {
-		headers: { ...headers, "content-type": "application/json" },
+	await mustOk(api.put(`${KEYCLOAK}/admin/realms/${REALM}/users/${userId}`, {
+		headers: json,
 		data: {
-			username: TEST_USERNAME,
-			email: TEST_EMAIL,
-			firstName: "Playwright",
-			lastName: "E2E",
+			username: TEST.username, email: TEST.email,
+			firstName: "Playwright", lastName: "E2E",
+			enabled: true, emailVerified: true,
 			requiredActions: [],
-			emailVerified: true,
-			enabled: true,
 			attributes: { provisioned: ["true"] },
 		},
-	});
-	if (!update.ok()) {
-		throw new Error(`clear required actions: ${update.status()} ${await update.text()}`);
+	}), "patch user");
+
+	// 4. Provision the row in user-service. Interactive logins do this via the
+	// SPI; direct-grant bypasses required actions, so we POST ourselves.
+	await mustOk(api.post(`${USER_SVC}/internal/provision`, {
+		headers: { "content-type": "application/json", authorization: `Bearer ${serviceToken}` },
+		data: { keycloak_sub: userId, email: TEST.email, display_name: TEST.displayName },
+	}), "provision user", [200, 201]);
+
+	// 5. User token; PATCH username so (main) layout doesn't redirect to /onboarding.
+	const user = await grant(REALM, CLIENT_ID, TEST.username, TEST.password, true);
+	const bearer = { authorization: `Bearer ${user.access_token}` };
+	const me = await mustJson<{ username: string | null }>(
+		api.get(`${KONG}/v1/users/me`, { headers: bearer }), "GET /v1/users/me");
+	if (!me.username) {
+		await mustOk(api.patch(`${KONG}/v1/users/me`, {
+			headers: { ...bearer, "content-type": "application/json" },
+			data: { username: TEST.username },
+		}), "PATCH /v1/users/me");
 	}
-	return id;
+
+	// 6. Write storageState directly. Cookie names match what /api/auth/callback sets.
+	await mkdir(path.dirname(AUTH_FILE), { recursive: true });
+	const c = { domain: "localhost", path: "/", httpOnly: true, secure: false, sameSite: "Lax" as const, expires: -1 };
+	await writeFile(AUTH_FILE, JSON.stringify({
+		cookies: [
+			{ ...c, name: "access_token", value: user.access_token },
+			{ ...c, name: "refresh_token", value: user.refresh_token },
+			{ ...c, name: "id_token", value: user.id_token },
+		],
+		origins: [],
+	}));
+
+	async function findUserId(): Promise<string | undefined> {
+		const list = await mustJson<Array<{ id: string }>>(
+			api.get(`${KEYCLOAK}/admin/realms/${REALM}/users?username=${TEST.username}&exact=true`, { headers: auth }),
+			"lookup user");
+		return list[0]?.id;
+	}
+
+	async function createUser() {
+		await mustOk(api.post(`${KEYCLOAK}/admin/realms/${REALM}/users`, {
+			headers: json,
+			data: {
+				username: TEST.username, email: TEST.email,
+				firstName: "Playwright", lastName: "E2E",
+				enabled: true, emailVerified: true,
+				credentials: [{ type: "password", value: TEST.password, temporary: false }],
+			},
+		}), "create user", [409]);
+	}
+
+	async function grant(realm: string, clientId: string, username: string, password: string, openid = false) {
+		const params = new URLSearchParams({ grant_type: "password", client_id: clientId, username, password });
+		if (openid) params.set("scope", "openid");
+		return mustJson<{ access_token: string; refresh_token: string; id_token: string }>(
+			api.post(`${KEYCLOAK}/realms/${realm}/protocol/openid-connect/token`, {
+				headers: { "content-type": "application/x-www-form-urlencoded" },
+				data: params.toString(),
+			}),
+			`grant ${realm}/${clientId}/${username}`);
+	}
+});
+
+async function mustOk(p: Promise<APIResponse>, label: string, allow: number[] = []) {
+	const r = await p;
+	if (r.ok() || allow.includes(r.status())) return r;
+	throw new Error(`${label}: ${r.status()} ${await r.text()}`);
 }
 
-// Sets a username via Kong so the (main) layout doesn't redirect us to
-// /onboarding. Idempotent — repeated PATCHes are no-ops once username is set.
-async function ensureUsername(
-	api: Awaited<ReturnType<typeof request.newContext>>,
-	accessToken: string,
-) {
-	const me = await api.get(`${KONG_URL}/v1/users/me`, {
-		headers: { authorization: `Bearer ${accessToken}` },
-	});
-	if (!me.ok()) {
-		throw new Error(`get /v1/users/me: ${me.status()} ${await me.text()}`);
-	}
-	const profile = (await me.json()) as { username: string | null };
-	if (profile.username) return;
-	const patch = await api.patch(`${KONG_URL}/v1/users/me`, {
-		headers: {
-			authorization: `Bearer ${accessToken}`,
-			"content-type": "application/json",
-		},
-		data: { username: TEST_USERNAME },
-	});
-	if (!patch.ok()) {
-		throw new Error(`patch /v1/users/me: ${patch.status()} ${await patch.text()}`);
-	}
-}
-
-async function provisionInUserService(
-	api: Awaited<ReturnType<typeof request.newContext>>,
-	keycloakSub: string,
-) {
-	const res = await api.post(`${USER_SERVICE_URL}/internal/provision`, {
-		headers: {
-			"content-type": "application/json",
-			authorization: `Bearer ${SERVICE_TOKEN}`,
-		},
-		data: {
-			keycloak_sub: keycloakSub,
-			email: TEST_EMAIL,
-			display_name: TEST_DISPLAY_NAME,
-		},
-	});
-	// 200 ok, 201 created — both fine; idempotent.
-	if (res.status() !== 200 && res.status() !== 201) {
-		throw new Error(`provision user: ${res.status()} ${await res.text()}`);
-	}
+async function mustJson<T>(p: Promise<APIResponse>, label: string): Promise<T> {
+	return (await mustOk(p, label)).json();
 }
