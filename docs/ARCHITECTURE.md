@@ -1816,9 +1816,9 @@ exporter — services don't change).
 
 ### Planned (Phase 12 — Resilience)
 
-- **HPA:** tweet-service and feed-service scale on CPU > 60% (Phase 9, needs EKS)
-- **Chaos exercises:** kill feed-service / Redis, verify Redis-miss graceful degradation paths
-- **k6 load test:** 50 concurrent feed reads + 20 tweet posts/sec for 2 min via Kong
+- **Chaos exercises (local):** kill feed-service / Redis, verify graceful degradation paths still serve traffic with empty author fields / zero counts.
+- **k6 load test (Phase 9, needs EKS):** 50 concurrent feed reads + 20 tweet posts/sec for 2 min via Kong. Pairs with HPA — load against docker-compose has no autoscaling or realistic latency profile, so the signal isn't useful until services run on EKS.
+- **HPA (Phase 9):** tweet-service and feed-service scale on CPU > 60%.
 
 ---
 
@@ -1891,7 +1891,7 @@ OAuth 2.0 Authorization Code flow, httpOnly cookie storage, silent token refresh
 
 ---
 
-### Phase 8 — Frontend (Next.js 16.2) ✅ (Playwright E2E pending)
+### Phase 8 — Frontend (Next.js 16.2) ✅
 - SSR-prefetched timeline/tweet/profile pages (`normalize.ts` pattern)
 - Optimistic like/retweet/follow/unfollow
 - Tweet compose with media upload
@@ -1906,8 +1906,7 @@ OAuth 2.0 Authorization Code flow, httpOnly cookie storage, silent token refresh
 - Shared `Avatar`, `TweetSkeleton`, `BackButton` components
 - `formatCount` vs `formatStatCount` distinction
 - Biome lint/format
-
-**Remaining:** Playwright E2E (Google mock login → post `#test` → feed → trending → search).
+- Playwright E2E (`apps/web/e2e/`) — post → profile timeline → trending → search. Direct-grant against Keycloak with cookie-based storageState (sidesteps the interactive Google OAuth dance); idempotent test-user provisioning via Keycloak admin API + user-service `/internal/provision`. `make test-e2e`.
 
 ---
 
@@ -1943,9 +1942,9 @@ gRPC failure → `is_liked`/`is_retweeted=false`; OpenAI down → keyword
 fallback); DLQs per consumer group with provenance headers; bounded fan-out
 concurrency.
 
-**Remaining:** retry with backoff + jitter on gRPC clients, `/healthz`
-dependency probes (DB + Redis ping), HPA (CPU 60%), k6 load test (50 concurrent
-feed reads, 20 tweet posts), chaos testing (kill feed-service, kill Redis).
+**Shipped this phase:** `/healthz` dep probes + `/livez` split; gRPC retry interceptor (backoff + jitter, inside the breaker boundary).
+**Remaining local:** chaos exercises (kill feed-service, kill Redis) documented as a procedure.
+**Deferred to Phase 9:** HPA (CPU 60%) and k6 load test — neither produces a meaningful signal against docker-compose.
 
 ---
 

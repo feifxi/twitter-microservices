@@ -60,6 +60,7 @@ make run-<service>     # run one Go service against dev-infra
 make run-web           # Next.js dev server
 make test              # unit tests
 make test-integration  # integration tests (needs Docker)
+make test-e2e          # Playwright E2E (needs make dev + make run-web)
 make generate-sqlc     # regen sqlc after editing db/query.sql
 make generate-proto    # regen protobuf after editing .proto
 make generate-realm    # render Keycloak realm from .env (auto-runs before dev)

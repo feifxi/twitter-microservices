@@ -6,7 +6,7 @@ REALM_VARS := '$${GOOGLE_CLIENT_ID} $${GOOGLE_CLIENT_SECRET} $${KEYCLOAK_ADMIN_C
 
 .PHONY: dev dev-infra dev-stop env-check \
         run-user-service run-tweet-service run-feed-service run-notification-service run-media-service run-search-service run-web \
-        build test test-integration test-all generate-sqlc generate-proto generate-realm lint healthcheck help
+        build test test-integration test-e2e test-all generate-sqlc generate-proto generate-realm lint healthcheck help
 
 ## Verify .env exists and required vars are set
 # GOOGLE_CLIENT_ID/SECRET are intentionally NOT required — Google IdP is optional.
@@ -155,6 +155,20 @@ lint:
 	done
 	@echo "→ biome (web)"
 	(cd apps/web && npx biome check .)
+
+## Run Playwright E2E suite against the local stack (requires: make dev + make run-web)
+test-e2e: env-check
+	@# Keycloak master realm defaults to sslRequired=external, which rejects direct
+	@# grant over HTTP. Idempotent; only runs once per stack lifetime in practice.
+	@set -a && . ./.env && set +a && \
+	  docker compose exec -T keycloak /opt/keycloak/bin/kcadm.sh config credentials \
+	    --server http://localhost:8080 --realm master \
+	    --user "$$KEYCLOAK_ADMIN" --password "$$KEYCLOAK_ADMIN_PASSWORD" >/dev/null && \
+	  docker compose exec -T keycloak /opt/keycloak/bin/kcadm.sh update realms/master -s sslRequired=NONE >/dev/null
+	@cd apps/web && \
+	  set -a && . ../../.env && set +a && \
+	  npx --no-install playwright install chromium >/dev/null 2>&1 || npx playwright install chromium && \
+	  npm run test:e2e
 
 ## Verify all healthz endpoints are up (requires dev stack running)
 healthcheck:
