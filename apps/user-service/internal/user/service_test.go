@@ -78,10 +78,6 @@ func (s *stubStore) IncrementFollowingCount(_ context.Context, _ string) error  
 func (s *stubStore) DecrementFollowingCount(_ context.Context, _ string) error     { return nil }
 func (s *stubStore) GetFollowerIDs(_ context.Context, _ string) ([]string, error)  { return nil, nil }
 func (s *stubStore) GetFollowingIDs(_ context.Context, _ string) ([]string, error) { return nil, nil }
-func (s *stubStore) GetFollowerCount(_ context.Context, _ string) (int64, error)   { return 0, nil }
-func (s *stubStore) BatchGetFollowerCounts(_ context.Context, _ []string) ([]db.BatchGetFollowerCountsRow, error) {
-	return nil, nil
-}
 func (s *stubStore) GetFollowState(_ context.Context, _ db.GetFollowStateParams) ([]string, error) {
 	return nil, nil
 }
@@ -94,6 +90,9 @@ func (s *stubStore) ListFollowing(_ context.Context, _ db.ListFollowingParams) (
 func (s *stubStore) ListUserSuggestions(_ context.Context, _ db.ListUserSuggestionsParams) ([]db.ListUserSuggestionsRow, error) {
 	return nil, nil
 }
+func (s *stubStore) ListAllUserCounts(_ context.Context) ([]db.ListAllUserCountsRow, error) {
+	return nil, nil
+}
 func (s *stubStore) InsertOutbox(_ context.Context, _ db.InsertOutboxParams) error { return nil }
 func (s *stubStore) GetPendingOutbox(_ context.Context) ([]db.GetPendingOutboxRow, error) {
 	return nil, nil
@@ -104,7 +103,7 @@ func (s *stubStore) Ping(_ context.Context) error                    { return ni
 func newTestService(t *testing.T, store db.Store) *user.Service {
 	t.Helper()
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	return user.New(store, nil, nil, log)
+	return user.New(store, nil, nil, nil, log)
 }
 
 // ── Follow ────────────────────────────────────────────────────────────────────

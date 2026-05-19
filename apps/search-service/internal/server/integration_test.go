@@ -54,8 +54,12 @@ func startOpenSearch(t *testing.T) string {
 			Image:        "opensearchproject/opensearch:3.5.0",
 			ExposedPorts: []string{"9200/tcp"},
 			Env: map[string]string{
-				"discovery.type":               "single-node",
-				"OPENSEARCH_SECURITY_DISABLED":  "true",
+				// OpenSearch 3.x: DISABLE_SECURITY_PLUGIN + DISABLE_INSTALL_DEMO_CONFIG
+				// together skip the security plugin entirely so no admin password is
+				// required. The old OPENSEARCH_SECURITY_DISABLED env var was 2.x-only.
+				"discovery.type":                "single-node",
+				"DISABLE_SECURITY_PLUGIN":       "true",
+				"DISABLE_INSTALL_DEMO_CONFIG":   "true",
 				"OPENSEARCH_JAVA_OPTS":          "-Xms512m -Xmx512m",
 			},
 			WaitingFor: wait.ForHTTP("/_cluster/health").

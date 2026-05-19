@@ -62,8 +62,9 @@ func testServer(t *testing.T) *httptest.Server {
 	}
 	t.Cleanup(pool.Close)
 
-	// nil writer: outbox flush guards against nil kb, so no Kafka broker needed in tests.
-	userSvc := user.New(db.NewStore(pool), nil, stubKeycloak{}, slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	// nil rdb + nil writer: incrCounts and outbox flush guard against nil, so
+	// no Redis or Kafka broker needed in tests.
+	userSvc := user.New(db.NewStore(pool), nil, nil, stubKeycloak{}, slog.New(slog.NewTextHandler(os.Stderr, nil)))
 	srv := server.New(userSvc, serviceToken, slog.New(slog.NewTextHandler(os.Stderr, nil)))
 
 	return httptest.NewServer(srv.Handler())
@@ -194,7 +195,7 @@ func TestIntegration_UpdateProfile_SetsUsername(t *testing.T) {
 	}, provisionHeaders()).Body.Close()
 
 	b, _ := json.Marshal(map[string]any{"username": "eve_handle"})
-	req, _ := http.NewRequest(http.MethodPatch, srv.URL+"/v1/users/"+sub, bytes.NewReader(b))
+	req, _ := http.NewRequest(http.MethodPatch, srv.URL+"/v1/users/me", bytes.NewReader(b))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-User-ID", sub)
 	resp, err := http.DefaultClient.Do(req)

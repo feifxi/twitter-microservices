@@ -23,7 +23,6 @@ import (
 type stubFanout struct{}
 
 func (stubFanout) GetFollowerIDs(_ context.Context, _ string) ([]string, error) { return nil, nil }
-func (stubFanout) GetFollowerCount(_ context.Context, _ string) (int64, error)  { return 0, nil }
 
 // stubTweets satisfies feed.TweetFetcher.
 type stubTweets struct{}
@@ -52,7 +51,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *consumer.Consumer) {
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	os.Setenv("SERVICE_TOKEN", "test-service-token")
 
-	c := consumer.New(rdb, stubFanout{}, log)
+	c := consumer.New(rdb, stubFanout{}, nil, log)
 	svc := feed.New(c, stubTweets{}, stubUsers{}, log)
 	srv := server.New(svc, log)
 
@@ -111,8 +110,8 @@ func TestIntegration_Following_Empty(t *testing.T) {
 	}
 	var body map[string]any
 	json.NewDecoder(resp.Body).Decode(&body)
-	if body["tweets"] == nil {
-		t.Error("expected tweets field in response")
+	if body["items"] == nil {
+		t.Error("expected items field in response")
 	}
 }
 

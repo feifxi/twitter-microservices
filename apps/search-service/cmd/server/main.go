@@ -77,9 +77,13 @@ func main() {
 	}
 	defer dlqWriter.Close()
 
+	rdb := redis.NewClient(&redis.Options{Addr: envutil.MustEnv("REDIS_URL")})
+	defer rdb.Close()
+
 	userSvc, err := userclient.New(
 		envutil.MustEnv("USER_SERVICE_GRPC_ADDR"),
 		envutil.MustEnv("SERVICE_TOKEN"),
+		rdb,
 	)
 	if err != nil {
 		log.Error("init user-service client", slog.Any("err", err))
@@ -96,9 +100,6 @@ func main() {
 		os.Exit(1)
 	}
 	defer tweetSvc.Close()
-
-	rdb := redis.NewClient(&redis.Options{Addr: envutil.MustEnv("REDIS_URL")})
-	defer rdb.Close()
 
 	tweetEnricher := enrich.New(rdb, tweetSvc)
 

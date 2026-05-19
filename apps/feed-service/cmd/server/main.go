@@ -59,7 +59,10 @@ func main() {
 	}
 	defer dlqWriter.Close()
 
-	c := consumer.New(rdb, userSvc, log).WithDLQ(dlqWriter)
+	// Adapter — consumer just needs the IDs; tweetclient.GetRecentTweets
+	// returns full Tweet structs (used elsewhere for celeb merge).
+	backfill := backfillAdapter{tweets: tweetSvc}
+	c := consumer.New(rdb, userSvc, backfill, log).WithDLQ(dlqWriter)
 
 	reader := kafka.NewReader(kafka.ReaderConfig{
 		Brokers: []string{envutil.MustEnv("KAFKA_BROKERS")},
@@ -90,4 +93,20 @@ func main() {
 	go c.RunTweetConsumer(ctx, reader)
 
 	srv.Start(ctx, ":"+envutil.GetEnv("PORT", "8080"))
+}
+
+type backfillAdapter struct {
+	tweets *tweetclient.Client
+}
+
+func (b backfillAdapter) GetRecentTweets(ctx context.Context, authorID string, limit int) ([]string, error) {
+	tweets, err := b.tweets.GetRecentTweets(ctx, authorID, limit)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, len(tweets))
+	for i, t := range tweets {
+		ids[i] = t.ID
+	}
+	return ids, nil
 }

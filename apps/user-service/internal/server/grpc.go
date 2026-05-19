@@ -39,22 +39,6 @@ func (g *grpcServer) GetFollowingIDs(ctx context.Context, req *userv1.GetFollowi
 	return &userv1.GetFollowingIDsResponse{FollowingIds: ids}, nil
 }
 
-func (g *grpcServer) GetFollowerCount(ctx context.Context, req *userv1.GetFollowerCountRequest) (*userv1.GetFollowerCountResponse, error) {
-	count, err := g.s.user.GetFollowerCount(ctx, req.UserId)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "get follower count: %v", err)
-	}
-	return &userv1.GetFollowerCountResponse{FollowerCount: count}, nil
-}
-
-func (g *grpcServer) BatchGetFollowerCounts(ctx context.Context, req *userv1.BatchGetFollowerCountsRequest) (*userv1.BatchGetFollowerCountsResponse, error) {
-	counts, err := g.s.user.BatchGetFollowerCounts(ctx, req.UserIds)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "batch get follower counts: %v", err)
-	}
-	return &userv1.BatchGetFollowerCountsResponse{FollowerCounts: counts}, nil
-}
-
 func (g *grpcServer) GetFollowState(ctx context.Context, req *userv1.GetFollowStateRequest) (*userv1.GetFollowStateResponse, error) {
 	state, err := g.s.user.GetFollowState(ctx, req.ViewerId, req.TargetIds)
 	if err != nil {

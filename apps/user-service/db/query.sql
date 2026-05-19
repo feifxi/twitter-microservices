@@ -64,14 +64,10 @@ SELECT EXISTS (
     WHERE follower_id = $1 AND followee_id = $2
 ) AS is_following;
 
--- name: GetFollowerCount :one
-SELECT COUNT(*) AS count FROM follows WHERE followee_id = $1;
-
--- name: BatchGetFollowerCounts :many
--- Reads from the denormalized follower_count column on users (HINCRBY-style
--- counter maintained by Increment/DecrementFollowerCount). Cheap point lookup
--- by primary key for each id.
-SELECT id, follower_count FROM users WHERE id = ANY(sqlc.arg(user_ids)::TEXT[]);
+-- name: ListAllUserCounts :many
+-- Used by RefreshAllCounts at boot to reconcile Redis user:counts:* from
+-- the Postgres source of truth. Idempotent.
+SELECT id, follower_count, following_count FROM users;
 
 -- name: GetFollowState :many
 -- Returns the subset of target_ids that viewer_id currently follows. Caller

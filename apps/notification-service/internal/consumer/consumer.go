@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 	"github.com/segmentio/kafka-go"
@@ -46,7 +47,15 @@ func New(svc EventHandler, dedup DedupStore, rdb *redis.Client, dlq *kafka.Write
 	return &Consumer{svc: svc, dedup: dedup, rdb: rdb, dlq: dlq, log: log}
 }
 
-// At-least-once: offset committed only after dispatch succeeds; poison messages routed to DLQ then committed through.
+const (
+	dispatchMaxAttempts = 3
+	dispatchBackoff     = 100 * time.Millisecond
+)
+
+// At-least-once: bounded in-process retry on transient dispatch errors, then
+// DLQ on exhaustion or unmarshal errors. Offset commits only after the message
+// is either successfully dispatched or routed to DLQ — no message advances
+// past unhandled state.
 func (c *Consumer) Run(ctx context.Context, r *kafka.Reader) {
 	for {
 		msg, err := r.FetchMessage(ctx)
@@ -68,21 +77,43 @@ func (c *Consumer) Run(ctx context.Context, r *kafka.Reader) {
 			continue
 		}
 
-		if err := c.dispatch(ctx, extractEventID(msg), msg); err != nil {
+		dispatchErr := c.dispatchWithRetry(ctx, msg)
+		if dispatchErr != nil {
 			metrics.KafkaConsumerErrors.WithLabelValues("notification-service", msg.Topic).Inc()
-			if errors.Is(err, errUnmarshal) {
-				dlq.Write(ctx, c.dlq, c.log, msg, err.Error())
-				c.log.ErrorContext(ctx, "poison message; routed to DLQ", "topic", msg.Topic, "offset", msg.Offset, "err", err)
-			} else {
-				c.log.ErrorContext(ctx, "dispatch failed; will retry", "topic", msg.Topic, "offset", msg.Offset, "err", err)
-				continue
-			}
+			dlq.Write(ctx, c.dlq, c.log, msg, dispatchErr.Error())
+			c.log.ErrorContext(ctx, "dispatch exhausted retries; routed to DLQ", "topic", msg.Topic, "offset", msg.Offset, "err", dispatchErr)
 		}
 
 		if err := r.CommitMessages(ctx, msg); err != nil {
 			c.log.ErrorContext(ctx, "kafka commit", "topic", msg.Topic, "offset", msg.Offset, "err", err)
 		}
 	}
+}
+
+// Retries transient dispatch errors a bounded number of times before giving
+// up. Unmarshal errors are non-retryable — they'd just fail again. Returns the
+// final error so the caller can route to DLQ.
+func (c *Consumer) dispatchWithRetry(ctx context.Context, msg kafka.Message) error {
+	var err error
+	for attempt := 0; attempt < dispatchMaxAttempts; attempt++ {
+		err = c.dispatch(ctx, extractEventID(msg), msg)
+		if err == nil {
+			return nil
+		}
+		if errors.Is(err, errUnmarshal) {
+			return err
+		}
+		if attempt == dispatchMaxAttempts-1 {
+			break
+		}
+		c.log.WarnContext(ctx, "dispatch failed; retrying", "topic", msg.Topic, "offset", msg.Offset, "attempt", attempt+1, "err", err)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(dispatchBackoff << attempt):
+		}
+	}
+	return err
 }
 
 func (c *Consumer) isDuplicate(ctx context.Context, msg kafka.Message) (bool, error) {

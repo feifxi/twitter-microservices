@@ -28,6 +28,7 @@ const (
 
 	tweetSnapshotKey = "tweet:snapshot:%s"
 	userSnapshotKey  = "user:snapshot:%s"
+	userCountsKey    = "user:counts:%s"
 	authorTweetsKey  = "author_tweets:%s"
 	tweetCountsKey   = "tweet:counts:%s"
 
@@ -59,7 +60,14 @@ const (
 
 type FanoutClient interface {
 	GetFollowerIDs(ctx context.Context, userID string) ([]string, error)
-	GetFollowerCount(ctx context.Context, userID string) (int64, error)
+}
+
+// TweetBackfillClient is used on user.followed events to seed the new
+// follower's `following:*` LIST with the followee's recent tweets — closes the
+// cold-start hole where freshly-followed accounts wouldn't appear in the feed
+// until they post next.
+type TweetBackfillClient interface {
+	GetRecentTweets(ctx context.Context, authorID string, limit int) (ids []string, err error)
 }
 
 const (
@@ -118,15 +126,17 @@ const fanoutConcurrency = 100
 type Consumer struct {
 	rdb       *redis.Client
 	fanout    FanoutClient
+	backfill  TweetBackfillClient
 	dlq       *kafka.Writer
 	log       *slog.Logger
 	fanoutSem chan struct{}
 }
 
-func New(rdb *redis.Client, fanout FanoutClient, log *slog.Logger) *Consumer {
+func New(rdb *redis.Client, fanout FanoutClient, backfill TweetBackfillClient, log *slog.Logger) *Consumer {
 	return &Consumer{
 		rdb:       rdb,
 		fanout:    fanout,
+		backfill:  backfill,
 		log:       log,
 		fanoutSem: make(chan struct{}, fanoutConcurrency),
 	}
@@ -285,6 +295,7 @@ func (c *Consumer) dispatch(ctx context.Context, g *errgroup.Group, msg kafka.Me
 		}
 		// Following is a strong signal — weight 5x compared to a like.
 		c.UpdateUserAffinity(ctx, evt.FollowerID, evt.FolloweeID, 5.0)
+		c.BackfillFollowingFeed(ctx, evt.FollowerID, evt.FolloweeID)
 		return nil
 
 	// tweet-service owns user:snapshot:{id}; feed-service only refreshes the
@@ -306,10 +317,11 @@ func (c *Consumer) FanOut(ctx context.Context, entry, authorID string) {
 	celebFlagKey := fmt.Sprintf(celebKey, authorID)
 	isceleb, _ := c.rdb.Exists(ctx, celebFlagKey).Result()
 	if isceleb == 0 {
-		count, err := c.fanout.GetFollowerCount(ctx, authorID)
-		if err != nil {
+		// user-service writes user:counts:{id} on every follow/unfollow. Missing
+		// key (HGet → redis.Nil) means count=0 — treat as non-celeb, fall through.
+		count, err := c.rdb.HGet(ctx, fmt.Sprintf(userCountsKey, authorID), "follower_count").Int64()
+		if err != nil && !errors.Is(err, redis.Nil) {
 			c.log.ErrorContext(ctx, "get follower count", "author", authorID, "err", err)
-			// Fall through and do fan-out anyway to not drop the tweet.
 		}
 		if count >= celebThreshold {
 			c.rdb.Set(ctx, celebFlagKey, "1", celebFlagTTL)
@@ -389,6 +401,44 @@ func (c *Consumer) RemoveRetweetFromFollowers(ctx context.Context, retweeterID, 
 	}
 	if _, err := pipe.Exec(ctx); err != nil {
 		c.log.ErrorContext(ctx, "pipeline unretweet remove", "retweeter", retweeterID, "err", err)
+	}
+}
+
+// BackfillFollowingFeed seeds the new follower's LIST with the followee's
+// recent tweets so they don't see an empty feed until the next post. Best-
+// effort: a gRPC failure leaves the LIST as-is and the fan-out path picks up
+// future tweets normally. The first-page sort by created_at in feed.Service
+// puts these in the right chronological position even if the LIST has older
+// entries from other followees.
+const backfillLimit = 20
+
+func (c *Consumer) BackfillFollowingFeed(ctx context.Context, followerID, followeeID string) {
+	if c.backfill == nil {
+		return
+	}
+	if c.IsCeleb(ctx, followeeID) {
+		// Celebrities are merged in at read time; backfilling would duplicate.
+		return
+	}
+	ids, err := c.backfill.GetRecentTweets(ctx, followeeID, backfillLimit)
+	if err != nil {
+		c.log.WarnContext(ctx, "backfill: get recent tweets", "followee", followeeID, "err", err)
+		return
+	}
+	if len(ids) == 0 {
+		return
+	}
+	key := fmt.Sprintf(followingKey, followerID)
+	pipe := c.rdb.Pipeline()
+	// LPUSH oldest-first so newest ends up at the head of the LIST — matches
+	// the order fan-out maintains for live tweets.
+	for i := len(ids) - 1; i >= 0; i-- {
+		pipe.LPush(ctx, key, EncodeTweetEntry(ids[i]))
+	}
+	pipe.LTrim(ctx, key, 0, followingLimit-1)
+	pipe.Expire(ctx, key, followingTTL)
+	if _, err := pipe.Exec(ctx); err != nil {
+		c.log.WarnContext(ctx, "backfill: pipeline exec", "follower", followerID, "followee", followeeID, "err", err)
 	}
 }
 
@@ -506,7 +556,8 @@ type TrendingTag struct {
 	Score int64  `json:"score"`
 }
 
-// Called on like or retweet.
+// Called on like or retweet. Busts the recommended-feed freshness marker so
+// the next read rebuilds with the new signal instead of waiting up to 15m.
 func (c *Consumer) UpdateUserInterests(ctx context.Context, userID string, hashtags []string, weight float64) {
 	if len(hashtags) == 0 {
 		return
@@ -517,12 +568,14 @@ func (c *Consumer) UpdateUserInterests(ctx context.Context, userID string, hasht
 		pipe.ZIncrBy(ctx, key, weight, tag)
 	}
 	pipe.Expire(ctx, key, signalTTL)
+	pipe.Del(ctx, fmt.Sprintf(recommendedTSKey, userID))
 	if _, err := pipe.Exec(ctx); err != nil {
 		c.log.ErrorContext(ctx, "update user interests", "user", userID, "err", err)
 	}
 }
 
-// Called on like, retweet, or follow.
+// Called on like, retweet, or follow. Busts the recommended-feed freshness
+// marker — same rationale as UpdateUserInterests.
 func (c *Consumer) UpdateUserAffinity(ctx context.Context, userID, authorID string, weight float64) {
 	if authorID == "" {
 		return
@@ -531,6 +584,7 @@ func (c *Consumer) UpdateUserAffinity(ctx context.Context, userID, authorID stri
 	pipe := c.rdb.Pipeline()
 	pipe.ZIncrBy(ctx, key, weight, authorID)
 	pipe.Expire(ctx, key, signalTTL)
+	pipe.Del(ctx, fmt.Sprintf(recommendedTSKey, userID))
 	if _, err := pipe.Exec(ctx); err != nil {
 		c.log.ErrorContext(ctx, "update user affinity", "user", userID, "err", err)
 	}

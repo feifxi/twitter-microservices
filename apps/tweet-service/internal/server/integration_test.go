@@ -175,7 +175,7 @@ func TestIntegration_Like_Idempotent(t *testing.T) {
 	}
 }
 
-func TestIntegration_SelfRetweet_Blocked(t *testing.T) {
+func TestIntegration_SelfRetweet_Allowed(t *testing.T) {
 	e := newTestEnv(t)
 	defer e.srv.Close()
 
@@ -184,8 +184,8 @@ func TestIntegration_SelfRetweet_Blocked(t *testing.T) {
 	tweetID := created["id"].(string)
 
 	resp := e.do(t, http.MethodPost, "/v1/tweets/"+tweetID+"/retweet", nil)
-	if resp.StatusCode != http.StatusUnprocessableEntity {
-		t.Fatalf("self-retweet: expected 422, got %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("self-retweet: expected 201, got %d", resp.StatusCode)
 	}
 	resp.Body.Close()
 }

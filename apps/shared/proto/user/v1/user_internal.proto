@@ -5,11 +5,11 @@ package user.v1;
 option go_package = "github.com/twitter/shared/proto/gen/user/v1;userv1";
 
 // UserInternal is called only by other services (not exposed via Kong).
+// Follower / following counts live in Redis (user:counts:{id}) and are read
+// directly there — no gRPC for those.
 service UserInternal {
   rpc GetFollowerIDs(GetFollowerIDsRequest) returns (GetFollowerIDsResponse);
   rpc GetFollowingIDs(GetFollowingIDsRequest) returns (GetFollowingIDsResponse);
-  rpc GetFollowerCount(GetFollowerCountRequest) returns (GetFollowerCountResponse);
-  rpc BatchGetFollowerCounts(BatchGetFollowerCountsRequest) returns (BatchGetFollowerCountsResponse);
   rpc GetFollowState(GetFollowStateRequest) returns (GetFollowStateResponse);
   rpc GetUserByID(GetUserByIDRequest) returns (GetUserByIDResponse);
 }
@@ -28,23 +28,6 @@ message GetFollowingIDsRequest {
 
 message GetFollowingIDsResponse {
   repeated string following_ids = 1;
-}
-
-message GetFollowerCountRequest {
-  string user_id = 1;
-}
-
-message GetFollowerCountResponse {
-  int64 follower_count = 1;
-}
-
-message BatchGetFollowerCountsRequest {
-  repeated string user_ids = 1;
-}
-
-message BatchGetFollowerCountsResponse {
-  // Map of user_id → follower_count. IDs absent from the request map are not returned.
-  map<string, int64> follower_counts = 1;
 }
 
 message GetFollowStateRequest {

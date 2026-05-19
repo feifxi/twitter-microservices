@@ -14,15 +14,11 @@ import (
 
 // stubFanout implements FanoutClient for tests.
 type stubFanout struct {
-	followerIDs   []string
-	followerCount int64
+	followerIDs []string
 }
 
 func (s *stubFanout) GetFollowerIDs(_ context.Context, _ string) ([]string, error) {
 	return s.followerIDs, nil
-}
-func (s *stubFanout) GetFollowerCount(_ context.Context, _ string) (int64, error) {
-	return s.followerCount, nil
 }
 
 func newTestConsumer(t *testing.T, fanout FanoutClient) (*Consumer, *miniredis.Miniredis) {
@@ -31,11 +27,11 @@ func newTestConsumer(t *testing.T, fanout FanoutClient) (*Consumer, *miniredis.M
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	t.Cleanup(func() { rdb.Close() })
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	return New(rdb, fanout, log), mr
+	return New(rdb, fanout, nil, log), mr
 }
 
 func TestFanOut_PushesToFollowerTimelines(t *testing.T) {
-	fanout := &stubFanout{followerIDs: []string{"usr_A", "usr_B"}, followerCount: 2}
+	fanout := &stubFanout{followerIDs: []string{"usr_A", "usr_B"}}
 	c, mr := newTestConsumer(t, fanout)
 
 	c.FanOut(context.Background(), "tw_001", "usr_author")
@@ -53,8 +49,10 @@ func TestFanOut_PushesToFollowerTimelines(t *testing.T) {
 }
 
 func TestFanOut_SkipsCeleb(t *testing.T) {
-	fanout := &stubFanout{followerIDs: []string{"usr_A"}, followerCount: int64(celebThreshold + 1)}
+	fanout := &stubFanout{followerIDs: []string{"usr_A"}}
 	c, mr := newTestConsumer(t, fanout)
+	// Seed Redis with the celeb's follower_count — user-service writes this in prod.
+	mr.HSet(fmt.Sprintf(userCountsKey, "usr_celeb"), "follower_count", fmt.Sprintf("%d", celebThreshold+1))
 
 	c.FanOut(context.Background(), "tw_001", "usr_celeb")
 
@@ -71,7 +69,7 @@ func TestFanOut_SkipsCeleb(t *testing.T) {
 }
 
 func TestFanOut_TrimsTimeline(t *testing.T) {
-	fanout := &stubFanout{followerIDs: []string{"usr_A"}, followerCount: 1}
+	fanout := &stubFanout{followerIDs: []string{"usr_A"}}
 	c, _ := newTestConsumer(t, fanout)
 	ctx := context.Background()
 

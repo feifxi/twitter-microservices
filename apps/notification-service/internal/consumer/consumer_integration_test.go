@@ -64,6 +64,26 @@ func startRedpanda(t *testing.T) string {
 	return brokers
 }
 
+// Pre-creates a topic so the first WriteMessages doesn't race with kafka-go's
+// AllowAutoTopicCreation. Without this, the producer occasionally hits the
+// broker before the auto-create finishes and fails with
+// "Unknown Topic Or Partition".
+func createTopic(t *testing.T, broker, topic string) {
+	t.Helper()
+	conn, err := kafka.DialContext(context.Background(), "tcp", broker)
+	if err != nil {
+		t.Fatalf("dial broker: %v", err)
+	}
+	defer conn.Close()
+	if err := conn.CreateTopics(kafka.TopicConfig{
+		Topic:             topic,
+		NumPartitions:     1,
+		ReplicationFactor: 1,
+	}); err != nil {
+		t.Fatalf("create topic %s: %v", topic, err)
+	}
+}
+
 // TestConsumer_RedeliversOnDispatchError is the red→green test for PR 1.
 //
 // Scenario: publish one tweet.liked event. The stub handler errors on the
@@ -84,12 +104,13 @@ func TestConsumer_RedeliversOnDispatchError(t *testing.T) {
 	const topic = events.TopicTweetLiked
 	const groupID = "notification-service-cg-test"
 
+	createTopic(t, broker, topic)
+
 	// Publish one tweet.liked event.
 	w := &kafka.Writer{
-		Addr:                   kafka.TCP(broker),
-		Topic:                  topic,
-		Balancer:               &kafka.Hash{},
-		AllowAutoTopicCreation: true,
+		Addr:     kafka.TCP(broker),
+		Topic:    topic,
+		Balancer: &kafka.Hash{},
 	}
 	defer w.Close()
 

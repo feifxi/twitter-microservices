@@ -316,13 +316,15 @@ Called by the Keycloak Required Action SPI on first login. Creates the DB row fr
 #### gRPC — `UserInternal` (port 9090)
 
 ```
-GetFollowerIDs(user_id)              → follower_ids[]              feed-service fan-out
-GetFollowerCount(user_id)            → follower_count              feed-service celebrity check
-GetFollowingIDs(user_id)             → following_ids[]             feed-service celeb merge at read time
-BatchGetFollowerCounts(user_ids[])   → map<user_id, follower_count> search-service user search enrichment
-GetFollowState(viewer_id, target_ids[]) → map<target_id, is_following> search-service user search enrichment
-GetUserByID(user_id)                 → user snapshot               available but unused for author enrichment (Redis preferred)
+GetFollowerIDs(user_id)              → follower_ids[]               feed-service fan-out
+GetFollowingIDs(user_id)             → following_ids[]              feed-service celeb merge at read time
+GetFollowState(viewer_id, target_ids[]) → map<target_id, is_following>  search-service user-search enrichment
+GetUserByID(user_id)                 → user snapshot                available but unused for author enrichment (Redis preferred)
 ```
+
+Follower / following **counts** are NOT served via gRPC — they live in
+`user:counts:{id}` (written by user-service on every follow/unfollow) and are
+read directly from Redis by feed-service and search-service.
 
 All gRPC calls require a `Bearer <SERVICE_TOKEN>` in the `authorization`
 metadata; the interceptor rejects unauthenticated calls.
@@ -830,10 +832,10 @@ keyword-only — semantic over usernames adds marginal value).
 ```
 
 `avatar_url` is stored on the OpenSearch `UserDoc` (retrieval-only `keyword`,
-not scored). `follower_count` and `is_following` are enriched per request via
-`user-service.UserInternal.BatchGetFollowerCounts` and `GetFollowState`
-(gobreaker-wrapped). Both calls degrade to zero/false on error rather than
-failing the search.
+not scored). `follower_count` is read from Redis `user:counts:{id}` via a
+pipelined HGET. `is_following` is enriched per request via
+`user-service.UserInternal.GetFollowState` (gobreaker-wrapped). Both degrade
+to zero/false on error rather than failing the search.
 
 ---
 
@@ -970,7 +972,8 @@ DB errors are mapped at the store layer: `pgxutil.MapErr(err)` converts `pgx.Err
 | notification-service | Redis Pub/Sub | publish/subscribe `notifications` | Multi-pod SSE fan-out |
 | notification-service | Kafka (consumer) | 5 topics | Persist notifications; push via SSE |
 | search-service | Redis | `HGETALL pipeline` | Author snapshots + live counts for search results |
-| search-service | user-service | gRPC | `BatchGetFollowerCounts` + `GetFollowState` for user search |
+| search-service | Redis | `HGET user:counts:*` | `follower_count` for user search results |
+| search-service | user-service | gRPC | `GetFollowState` for `is_following` on user search |
 | search-service | tweet-service | gRPC | `GetInteractions` for viewer flags on tweet search |
 | search-service | OpenAI API | HTTPS | Generate 256-dim embeddings for index + query |
 | search-service | Kafka (consumer) | 4 topics | Keep OpenSearch index in sync |
@@ -1267,6 +1270,15 @@ user:snapshot:{user_id}
               notification-service (actor enrichment),
               search-service (tweet-search author enrichment)
 
+user:counts:{user_id}
+  HASH  follower_count, following_count
+  TTL:  none (overwritten on follow/unfollow; reconciled from Postgres on
+              user-service boot via RefreshAllCounts)
+  Written by: user-service (sole writer — HINCRBY after each follow/unfollow
+              tx commits; HSET 0/0 on Provision)
+  Read by:    feed-service (celebrity-threshold check during fan-out),
+              search-service (user-search follower_count enrichment)
+
 # ── Tweet snapshots ──────────────────────────────────────────────────────────
 tweet:snapshot:{tweet_id}
   HASH  body, author_id, type, reply_to_id, media_id, media_url,
@@ -1487,7 +1499,7 @@ encode entry:
     original tweet  →  "T|<tweet_id>"
     retweet         →  "R|<rt_id>|<original_tweet_id>|<retweeter_id>|<epoch>"
 
-follower_count = gRPC GetFollowerCount(author_id)
+follower_count = HGET user:counts:{author_id} follower_count
 
 if follower_count < 1000:                      ← regular author
     for each follower_id in GetFollowerIDs:
@@ -1531,7 +1543,14 @@ per retweeter, run async on the consumer.
 
 **Why celebrity (fan-out on read)?** For accounts with ≥1K followers, writing to each follower's list at tweet time is too expensive. Instead, we flag the author and lazily merge their tweets at read time from the gRPC call. The 1K threshold is a tuning parameter, not a hard limit.
 
-**Cold start:** Empty `following:{user_id}` returns an empty feed — no backfill. The list rebuilds naturally as followees tweet. The 7-day TTL means it's rare for active users.
+**Cold start:** On every `user.followed` event, feed-service's consumer
+calls `tweet-service.GetTweetsByAuthor(followee, limit=20)` via gRPC and
+`LPUSH`es those IDs into the new follower's `following:{follower}` LIST.
+Celebrities are skipped (the read-path celeb merge already covers them).
+This means a brand-new user who follows 50 accounts immediately sees content
+from those accounts instead of staring at an empty feed. The first-page sort
+by `created_at` in feed.Service.GetFollowingFeed puts the backfilled IDs in
+the correct chronological position even when mixed with live fan-out entries.
 
 ### Cursor Pagination
 
@@ -1589,6 +1608,13 @@ Build process (triggered when `recommended_ts:{user_id}` is absent):
 4. Set `recommended_ts:{user_id}` with 15-min TTL
 
 Read-time enrichment is identical to the following feed (snapshots + counts + interactions).
+
+**Cache invalidation on user activity.** Every `like` / `retweet` / `follow`
+deletes `recommended_ts:{userID}` inside the same pipeline that updates the
+signals — `UpdateUserInterests` and `UpdateUserAffinity`. The next read sees
+the missing freshness flag and rebuilds with the just-updated signals. Without
+this, recent actions wouldn't influence the feed for up to 15 minutes; with
+it, the 15-min TTL becomes an *upper bound*, not a floor.
 
 ### Real-time Notifications (SSE)
 

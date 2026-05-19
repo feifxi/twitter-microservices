@@ -56,16 +56,6 @@ func (c *Client) GetFollowerIDs(ctx context.Context, userID string) ([]string, e
 	return raw.(*userv1.GetFollowerIDsResponse).FollowerIds, nil
 }
 
-func (c *Client) GetFollowerCount(ctx context.Context, userID string) (int64, error) {
-	raw, err := c.cb.Execute(func() (interface{}, error) {
-		return c.stub.GetFollowerCount(c.auth(ctx), &userv1.GetFollowerCountRequest{UserId: userID})
-	})
-	if err != nil {
-		return 0, err
-	}
-	return raw.(*userv1.GetFollowerCountResponse).FollowerCount, nil
-}
-
 func (c *Client) GetFollowingIDs(ctx context.Context, userID string) ([]string, error) {
 	raw, err := c.cb.Execute(func() (interface{}, error) {
 		return c.stub.GetFollowingIDs(c.auth(ctx), &userv1.GetFollowingIDsRequest{UserId: userID})

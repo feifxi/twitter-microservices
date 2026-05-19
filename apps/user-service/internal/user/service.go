@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/redis/go-redis/v9"
 	"github.com/segmentio/kafka-go"
 	"github.com/twitter/shared/events"
 	"github.com/twitter/shared/httperr"
@@ -42,13 +43,56 @@ type UpdateProfileParams struct {
 
 type Service struct {
 	store db.Store
+	rdb   *redis.Client
 	kb    *kafka.Writer
 	kc    keycloak.Admin
 	log   *slog.Logger
 }
 
-func New(store db.Store, kb *kafka.Writer, kc keycloak.Admin, log *slog.Logger) *Service {
-	return &Service{store: store, kb: kb, kc: kc, log: log}
+func New(store db.Store, rdb *redis.Client, kb *kafka.Writer, kc keycloak.Admin, log *slog.Logger) *Service {
+	return &Service{store: store, rdb: rdb, kb: kb, kc: kc, log: log}
+}
+
+// userCountsKey holds follower_count + following_count for fast cross-service
+// reads. user-service is the single writer — incremented on follow/unfollow
+// after the Postgres tx commits. RefreshAllCounts on boot reconciles drift
+// (fresh Redis volume, mid-write crash).
+const userCountsKey = "user:counts:%s"
+
+// HSets both counts to the values currently in Postgres. Idempotent — running
+// it twice produces the same state. Nil rdb is a no-op (unit tests).
+func (s *Service) RefreshAllCounts(ctx context.Context) error {
+	if s.rdb == nil {
+		return nil
+	}
+	users, err := s.store.ListAllUserCounts(ctx)
+	if err != nil {
+		return err
+	}
+	pipe := s.rdb.Pipeline()
+	for _, u := range users {
+		pipe.HSet(ctx, fmt.Sprintf(userCountsKey, u.ID), map[string]any{
+			"follower_count":  u.FollowerCount,
+			"following_count": u.FollowingCount,
+		})
+	}
+	_, err = pipe.Exec(ctx)
+	return err
+}
+
+// incrCounts adjusts follower / following counts in Redis after a successful
+// follow or unfollow. Best-effort: a Redis blip leaves Postgres authoritative,
+// and the next RefreshAllCounts (boot) reconciles. Eventually consistent.
+func (s *Service) incrCounts(ctx context.Context, followerID, followeeID string, delta int64) {
+	if s.rdb == nil {
+		return
+	}
+	pipe := s.rdb.Pipeline()
+	pipe.HIncrBy(ctx, fmt.Sprintf(userCountsKey, followerID), "following_count", delta)
+	pipe.HIncrBy(ctx, fmt.Sprintf(userCountsKey, followeeID), "follower_count", delta)
+	if _, err := pipe.Exec(ctx); err != nil {
+		s.log.WarnContext(ctx, "user:counts hincrby", "follower", followerID, "followee", followeeID, "delta", delta, "err", err)
+	}
 }
 
 // Provision is idempotent on duplicate sub; an email conflict with a different sub returns ErrConflict.
@@ -93,6 +137,15 @@ func (s *Service) Provision(ctx context.Context, sub, email, displayName string)
 			return db.User{}, false, httperr.ErrConflict
 		}
 		return db.User{}, false, err
+	}
+	// Seed user:counts so cross-service readers don't need a fallback path.
+	if s.rdb != nil {
+		if err := s.rdb.HSet(ctx, fmt.Sprintf(userCountsKey, u.ID), map[string]any{
+			"follower_count":  0,
+			"following_count": 0,
+		}).Err(); err != nil {
+			s.log.WarnContext(ctx, "seed user:counts", "user_id", u.ID, "err", err)
+		}
 	}
 	return u, true, nil
 }
@@ -166,6 +219,7 @@ func (s *Service) Follow(ctx context.Context, followerID, followeeID string) err
 		return pgxutil.MapErr(err)
 	}
 
+	var applied bool
 	err := s.store.ExecTx(ctx, func(q db.Querier) error {
 		tag, err := q.CreateFollow(ctx, db.CreateFollowParams{
 			FollowerID: followerID,
@@ -177,6 +231,7 @@ func (s *Service) Follow(ctx context.Context, followerID, followeeID string) err
 		if tag.RowsAffected() == 0 {
 			return nil
 		}
+		applied = true
 		if err := q.IncrementFollowerCount(ctx, followeeID); err != nil {
 			s.log.WarnContext(ctx, "increment follower count", "user_id", followeeID, "err", err)
 		}
@@ -189,11 +244,14 @@ func (s *Service) Follow(ctx context.Context, followerID, followeeID string) err
 			CreatedAt:  time.Now(),
 		})
 	})
+	if err == nil && applied {
+		s.incrCounts(ctx, followerID, followeeID, +1)
+	}
 	return err
 }
 
 func (s *Service) Unfollow(ctx context.Context, followerID, followeeID string) error {
-	return s.store.ExecTx(ctx, func(q db.Querier) error {
+	err := s.store.ExecTx(ctx, func(q db.Querier) error {
 		if err := q.DeleteFollow(ctx, db.DeleteFollowParams{
 			FollowerID: followerID,
 			FolloweeID: followeeID,
@@ -208,6 +266,10 @@ func (s *Service) Unfollow(ctx context.Context, followerID, followeeID string) e
 		}
 		return nil
 	})
+	if err == nil {
+		s.incrCounts(ctx, followerID, followeeID, -1)
+	}
+	return err
 }
 
 type UserListItem struct {
@@ -388,27 +450,6 @@ func (s *Service) GetFollowerIDs(ctx context.Context, userID string) ([]string, 
 func (s *Service) GetFollowingIDs(ctx context.Context, userID string) ([]string, error) {
 	ids, err := s.store.GetFollowingIDs(ctx, userID)
 	return ids, pgxutil.MapErr(err)
-}
-
-func (s *Service) GetFollowerCount(ctx context.Context, userID string) (int64, error) {
-	n, err := s.store.GetFollowerCount(ctx, userID)
-	return n, pgxutil.MapErr(err)
-}
-
-// IDs that don't exist are omitted from the result map.
-func (s *Service) BatchGetFollowerCounts(ctx context.Context, userIDs []string) (map[string]int64, error) {
-	if len(userIDs) == 0 {
-		return map[string]int64{}, nil
-	}
-	rows, err := s.store.BatchGetFollowerCounts(ctx, userIDs)
-	if err != nil {
-		return nil, pgxutil.MapErr(err)
-	}
-	out := make(map[string]int64, len(rows))
-	for _, r := range rows {
-		out[r.ID] = int64(r.FollowerCount)
-	}
-	return out, nil
 }
 
 // Returned as a map for O(1) lookup; missing keys default to false.

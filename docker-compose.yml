@@ -230,6 +230,7 @@ services:
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable&search_path=users
       MIGRATIONS_TABLE: user_migrations
       KAFKA_BROKERS: redpanda:9092
+      REDIS_URL: redis:6379
       SERVICE_TOKEN: ${SERVICE_TOKEN}
       KEYCLOAK_BASE_URL: http://keycloak:8080
       KEYCLOAK_REALM: twitter
@@ -238,6 +239,8 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: jaeger:4317
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
       redpanda-init:
         condition: service_completed_successfully

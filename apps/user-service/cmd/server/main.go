@@ -8,6 +8,7 @@ import (
 	"syscall"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 	"github.com/segmentio/kafka-go"
 	"github.com/twitter/shared/dbmigrate"
 	"github.com/twitter/shared/envutil"
@@ -43,6 +44,13 @@ func main() {
 	}
 	defer pool.Close()
 
+	rdb := redis.NewClient(&redis.Options{Addr: envutil.MustEnv("REDIS_URL")})
+	defer rdb.Close()
+	if err := rdb.Ping(context.Background()).Err(); err != nil {
+		log.Error("redis ping", slog.Any("err", err))
+		os.Exit(1)
+	}
+
 	kw := &kafka.Writer{
 		Addr:         kafka.TCP(envutil.MustEnv("KAFKA_BROKERS")),
 		Balancer:     &kafka.Hash{},
@@ -59,13 +67,20 @@ func main() {
 	)
 
 	serviceToken := envutil.MustEnv("SERVICE_TOKEN")
-	userSvc := user.New(db.NewStore(pool), kw, kc, log)
+	userSvc := user.New(db.NewStore(pool), rdb, kw, kc, log)
 	srv := server.New(userSvc, serviceToken, log,
 		healthz.Func("postgres", pool.Ping),
+		healthz.Func("redis", func(ctx context.Context) error { return rdb.Ping(ctx).Err() }),
 	)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	// Sync user:counts:* from Postgres on boot — handles fresh Redis (dev volume
+	// wipe, ephemeral AWS env) and any drift from a previous crash mid-write.
+	if err := userSvc.RefreshAllCounts(ctx); err != nil {
+		log.Warn("refresh user counts", slog.Any("err", err))
+	}
 
 	go outbox.Run(ctx, log, "user-service", userSvc.FlushOutbox)
 

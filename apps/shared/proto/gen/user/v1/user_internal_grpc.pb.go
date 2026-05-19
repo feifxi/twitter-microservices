@@ -19,12 +19,10 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	UserInternal_GetFollowerIDs_FullMethodName         = "/user.v1.UserInternal/GetFollowerIDs"
-	UserInternal_GetFollowingIDs_FullMethodName        = "/user.v1.UserInternal/GetFollowingIDs"
-	UserInternal_GetFollowerCount_FullMethodName       = "/user.v1.UserInternal/GetFollowerCount"
-	UserInternal_BatchGetFollowerCounts_FullMethodName = "/user.v1.UserInternal/BatchGetFollowerCounts"
-	UserInternal_GetFollowState_FullMethodName         = "/user.v1.UserInternal/GetFollowState"
-	UserInternal_GetUserByID_FullMethodName            = "/user.v1.UserInternal/GetUserByID"
+	UserInternal_GetFollowerIDs_FullMethodName  = "/user.v1.UserInternal/GetFollowerIDs"
+	UserInternal_GetFollowingIDs_FullMethodName = "/user.v1.UserInternal/GetFollowingIDs"
+	UserInternal_GetFollowState_FullMethodName  = "/user.v1.UserInternal/GetFollowState"
+	UserInternal_GetUserByID_FullMethodName     = "/user.v1.UserInternal/GetUserByID"
 )
 
 // UserInternalClient is the client API for UserInternal service.
@@ -32,11 +30,11 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
 // UserInternal is called only by other services (not exposed via Kong).
+// Follower / following counts live in Redis (user:counts:{id}) and are read
+// directly there — no gRPC for those.
 type UserInternalClient interface {
 	GetFollowerIDs(ctx context.Context, in *GetFollowerIDsRequest, opts ...grpc.CallOption) (*GetFollowerIDsResponse, error)
 	GetFollowingIDs(ctx context.Context, in *GetFollowingIDsRequest, opts ...grpc.CallOption) (*GetFollowingIDsResponse, error)
-	GetFollowerCount(ctx context.Context, in *GetFollowerCountRequest, opts ...grpc.CallOption) (*GetFollowerCountResponse, error)
-	BatchGetFollowerCounts(ctx context.Context, in *BatchGetFollowerCountsRequest, opts ...grpc.CallOption) (*BatchGetFollowerCountsResponse, error)
 	GetFollowState(ctx context.Context, in *GetFollowStateRequest, opts ...grpc.CallOption) (*GetFollowStateResponse, error)
 	GetUserByID(ctx context.Context, in *GetUserByIDRequest, opts ...grpc.CallOption) (*GetUserByIDResponse, error)
 }
@@ -69,26 +67,6 @@ func (c *userInternalClient) GetFollowingIDs(ctx context.Context, in *GetFollowi
 	return out, nil
 }
 
-func (c *userInternalClient) GetFollowerCount(ctx context.Context, in *GetFollowerCountRequest, opts ...grpc.CallOption) (*GetFollowerCountResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(GetFollowerCountResponse)
-	err := c.cc.Invoke(ctx, UserInternal_GetFollowerCount_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *userInternalClient) BatchGetFollowerCounts(ctx context.Context, in *BatchGetFollowerCountsRequest, opts ...grpc.CallOption) (*BatchGetFollowerCountsResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(BatchGetFollowerCountsResponse)
-	err := c.cc.Invoke(ctx, UserInternal_BatchGetFollowerCounts_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *userInternalClient) GetFollowState(ctx context.Context, in *GetFollowStateRequest, opts ...grpc.CallOption) (*GetFollowStateResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetFollowStateResponse)
@@ -114,11 +92,11 @@ func (c *userInternalClient) GetUserByID(ctx context.Context, in *GetUserByIDReq
 // for forward compatibility.
 //
 // UserInternal is called only by other services (not exposed via Kong).
+// Follower / following counts live in Redis (user:counts:{id}) and are read
+// directly there — no gRPC for those.
 type UserInternalServer interface {
 	GetFollowerIDs(context.Context, *GetFollowerIDsRequest) (*GetFollowerIDsResponse, error)
 	GetFollowingIDs(context.Context, *GetFollowingIDsRequest) (*GetFollowingIDsResponse, error)
-	GetFollowerCount(context.Context, *GetFollowerCountRequest) (*GetFollowerCountResponse, error)
-	BatchGetFollowerCounts(context.Context, *BatchGetFollowerCountsRequest) (*BatchGetFollowerCountsResponse, error)
 	GetFollowState(context.Context, *GetFollowStateRequest) (*GetFollowStateResponse, error)
 	GetUserByID(context.Context, *GetUserByIDRequest) (*GetUserByIDResponse, error)
 	mustEmbedUnimplementedUserInternalServer()
@@ -136,12 +114,6 @@ func (UnimplementedUserInternalServer) GetFollowerIDs(context.Context, *GetFollo
 }
 func (UnimplementedUserInternalServer) GetFollowingIDs(context.Context, *GetFollowingIDsRequest) (*GetFollowingIDsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetFollowingIDs not implemented")
-}
-func (UnimplementedUserInternalServer) GetFollowerCount(context.Context, *GetFollowerCountRequest) (*GetFollowerCountResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method GetFollowerCount not implemented")
-}
-func (UnimplementedUserInternalServer) BatchGetFollowerCounts(context.Context, *BatchGetFollowerCountsRequest) (*BatchGetFollowerCountsResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method BatchGetFollowerCounts not implemented")
 }
 func (UnimplementedUserInternalServer) GetFollowState(context.Context, *GetFollowStateRequest) (*GetFollowStateResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetFollowState not implemented")
@@ -206,42 +178,6 @@ func _UserInternal_GetFollowingIDs_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
-func _UserInternal_GetFollowerCount_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GetFollowerCountRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(UserInternalServer).GetFollowerCount(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: UserInternal_GetFollowerCount_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(UserInternalServer).GetFollowerCount(ctx, req.(*GetFollowerCountRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _UserInternal_BatchGetFollowerCounts_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(BatchGetFollowerCountsRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(UserInternalServer).BatchGetFollowerCounts(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: UserInternal_BatchGetFollowerCounts_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(UserInternalServer).BatchGetFollowerCounts(ctx, req.(*BatchGetFollowerCountsRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _UserInternal_GetFollowState_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetFollowStateRequest)
 	if err := dec(in); err != nil {
@@ -292,14 +228,6 @@ var UserInternal_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetFollowingIDs",
 			Handler:    _UserInternal_GetFollowingIDs_Handler,
-		},
-		{
-			MethodName: "GetFollowerCount",
-			Handler:    _UserInternal_GetFollowerCount_Handler,
-		},
-		{
-			MethodName: "BatchGetFollowerCounts",
-			Handler:    _UserInternal_BatchGetFollowerCounts_Handler,
 		},
 		{
 			MethodName: "GetFollowState",
