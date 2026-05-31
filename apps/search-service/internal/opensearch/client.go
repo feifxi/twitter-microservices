@@ -362,7 +362,7 @@ func tweetMapping() string {
 					"method": {
 						"name": "hnsw",
 						"space_type": "cosinesimil",
-						"engine": "faiss",
+						"engine": "lucene",
 						"parameters": { "ef_construction": 128, "m": 16 }
 					}
 				}
@@ -390,7 +390,7 @@ func userMapping() string {
 					"method": {
 						"name": "hnsw",
 						"space_type": "cosinesimil",
-						"engine": "faiss",
+						"engine": "lucene",
 						"parameters": { "ef_construction": 128, "m": 16 }
 					}
 				}

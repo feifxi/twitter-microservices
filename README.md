@@ -4,6 +4,39 @@ Cloud-native microservices Twitter clone — learning project for distributed sy
 
 ![Preview](docs/images/preview.png)
 
+## Distributed Systems Concepts
+
+What this project demonstrates end-to-end. Implementation detail in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+**Data integrity**
+- **Transactional outbox** — Kafka publish committed in the same DB transaction as the row that caused it; no dual-write window.
+- **At-least-once + consumer idempotency** via `ON CONFLICT DO NOTHING` and per-event dedup tables.
+- **Single-writer rule** — `tweet-service` is the sole writer of `user:snapshot:*` in Redis.
+- **Schema-per-service** on a shared Postgres cluster; no cross-service DB access.
+
+**Read-side scalability**
+- **Hybrid fan-out** — push to followers on write for regular authors, pull-on-read merge for celebrity authors (≥1K followers).
+- **Denormalised Redis snapshots** — `tweet:snapshot` / `user:snapshot` / `tweet:counts` collapse N joins into one pipelined `HGETALL` on the feed read path.
+- **Cursor pagination** with ULID-sortable IDs — O(1) index seek regardless of page depth.
+- **Sliding-window aggregation** — trending is `ZUNIONSTORE` over the last 60 minute buckets, auto-decaying via TTL.
+- **CQRS split** — `tweet-service` writes (Postgres source of truth), `feed-service` reads (Redis-only path).
+
+**Inter-service communication**
+- **gRPC internally, REST through Kong externally.** Internal calls have stronger contracts; external clients get a single auth boundary.
+- **Circuit breakers** (gobreaker) + **retry with backoff + jitter** wrapping every cross-service gRPC client; retry sits inside the breaker so the breaker observes the final outcome.
+- **Dead-letter queues** per consumer group with provenance headers for replay.
+- **Bounded concurrency** — 100-slot semaphore caps inflight fan-out goroutines on a burst.
+
+**Resilience**
+- **Graceful degradation everywhere** — Redis miss → empty author fields, gRPC failure → `is_liked=false`, OpenAI down → keyword-fallback search. Never 5xx the user just because a dep blipped.
+- **`/healthz` (dep-aware readiness, returns 503 when a backing store is unreachable)** vs **`/livez` (always-200 liveness)** — load balancer pulls the pod out of rotation but k8s doesn't restart it.
+
+**Real-time push**
+- **SSE + Redis Pub/Sub** — every notification-service pod fans out via Pub/Sub, each pod forwards to its local SSE subscribers, no sticky sessions required.
+
+**Observability spine**
+- **W3C `traceparent`** propagated through HTTP, gRPC, **and Kafka message headers** — one trace per user action across every hop.
+
 ## Stack
 
 | Component | Local Dev | Production (AWS) |
@@ -79,47 +112,6 @@ make healthcheck       # curl all /healthz endpoints
 | Prometheus | http://localhost:9090 |
 | OpenSearch | http://localhost:9200 |
 | LocalStack S3 | http://localhost:4566 |
-
-## Auth
-
-Keycloak (OIDC + Google IdP) → Kong (JWT validation) → injects `X-User-ID` / `X-User-Email` / `X-User-Username` headers. Services never handle tokens.
-
-## Observability
-
-Every service emits JSON logs (`slog`), Prometheus metrics on `/metrics`, and OTLP traces. W3C `traceparent` is propagated through HTTP, gRPC, and Kafka headers so a single request can be followed from Kong → service → outbox → consumer → SSE in one Jaeger trace.
-
-## Distributed Systems Concepts
-
-What this project demonstrates end-to-end. Implementation detail in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
-
-**Data integrity**
-- **Transactional outbox** — Kafka publish committed in the same DB transaction as the row that caused it; no dual-write window.
-- **At-least-once + consumer idempotency** via `ON CONFLICT DO NOTHING` and per-event dedup tables.
-- **Single-writer rule** — `tweet-service` is the sole writer of `user:snapshot:*` in Redis.
-- **Schema-per-service** on a shared Postgres cluster; no cross-service DB access.
-
-**Read-side scalability**
-- **Hybrid fan-out** — push to followers on write for regular authors, pull-on-read merge for celebrity authors (≥1K followers).
-- **Denormalised Redis snapshots** — `tweet:snapshot` / `user:snapshot` / `tweet:counts` collapse N joins into one pipelined `HGETALL` on the feed read path.
-- **Cursor pagination** with ULID-sortable IDs — O(1) index seek regardless of page depth.
-- **Sliding-window aggregation** — trending is `ZUNIONSTORE` over the last 60 minute buckets, auto-decaying via TTL.
-- **CQRS split** — `tweet-service` writes (Postgres source of truth), `feed-service` reads (Redis-only path).
-
-**Inter-service communication**
-- **gRPC internally, REST through Kong externally.** Internal calls have stronger contracts; external clients get a single auth boundary.
-- **Circuit breakers** (gobreaker) + **retry with backoff + jitter** wrapping every cross-service gRPC client; retry sits inside the breaker so the breaker observes the final outcome.
-- **Dead-letter queues** per consumer group with provenance headers for replay.
-- **Bounded concurrency** — 100-slot semaphore caps inflight fan-out goroutines on a burst.
-
-**Resilience**
-- **Graceful degradation everywhere** — Redis miss → empty author fields, gRPC failure → `is_liked=false`, OpenAI down → keyword-fallback search. Never 5xx the user just because a dep blipped.
-- **`/healthz` (dep-aware readiness, returns 503 when a backing store is unreachable)** vs **`/livez` (always-200 liveness)** — load balancer pulls the pod out of rotation but k8s doesn't restart it.
-
-**Real-time push**
-- **SSE + Redis Pub/Sub** — every notification-service pod fans out via Pub/Sub, each pod forwards to its local SSE subscribers, no sticky sessions required.
-
-**Observability spine**
-- **W3C `traceparent`** propagated through HTTP, gRPC, **and Kafka message headers** — one trace per user action across every hop.
 
 ## Docs
 

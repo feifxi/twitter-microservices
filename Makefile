@@ -1,12 +1,20 @@
 SERVICES := user-service tweet-service feed-service notification-service media-service search-service
 
+# Every image we push to ECR. Each one has a Dockerfile at apps/<name>/Dockerfile.
+# Same build pattern across all: docker build --platform linux/amd64 with repo root as context.
+ECR_IMAGES := $(SERVICES) web keycloak
+
 # Vars that must be substituted into the Keycloak realm template.
 # Listed explicitly so envsubst leaves other ${...} sequences alone if any appear.
 REALM_VARS := '$${GOOGLE_CLIENT_ID} $${GOOGLE_CLIENT_SECRET} $${KEYCLOAK_ADMIN_CLIENT_SECRET}'
 
 .PHONY: dev dev-infra dev-stop env-check \
         run-user-service run-tweet-service run-feed-service run-notification-service run-media-service run-search-service run-web \
-        build test test-integration test-e2e test-all generate-sqlc generate-proto generate-realm lint healthcheck help
+        build test test-integration test-e2e test-all generate-sqlc generate-proto generate-realm lint healthcheck help \
+        stage-bootstrap stage-init stage-up stage-up-auto stage-plan stage-down stage-unlock stage-kubeconfig ecr-push ecr-push-only _ecr-push-batch githooks
+
+TF_BOOTSTRAP := infra/terraform/bootstrap
+TF_STAGE     := infra/terraform/envs/stage
 
 ## Verify .env exists and required vars are set
 # GOOGLE_CLIENT_ID/SECRET are intentionally NOT required — Google IdP is optional.
@@ -179,6 +187,89 @@ healthcheck:
 	@curl -sf http://localhost:8004/healthz | jq .
 	@curl -sf http://localhost:8005/healthz | jq .
 	@curl -sf http://localhost:8006/healthz | jq .
+
+## One-shot per AWS account: state bucket + DDB lock + GitHub OIDC role + monthly budget alarms
+stage-bootstrap:
+	cd $(TF_BOOTSTRAP) && terraform init && terraform apply
+
+## Initialize stage backend from bootstrap outputs. Run after stage-bootstrap or whenever .terraform/ is gone.
+stage-init:
+	cd $(TF_STAGE) && terraform init -reconfigure \
+	  -backend-config="bucket=$$(terraform -chdir=../../bootstrap output -raw state_bucket)" \
+	  -backend-config="region=$$(terraform -chdir=../../bootstrap output -raw region)"
+
+## Provision the stage environment (Phase 9 chunks 1-10).
+## Runs as TWO phases because the alekc/kubectl provider can't configure when
+## the EKS cluster endpoint is unknown (cluster doesn't exist yet on first apply):
+##   Phase 1: full VPC + EKS cluster + helm addons (you confirm 'yes')
+##   Phase 2: data plane + ECR + ExternalSecrets (you confirm 'yes' again)
+## After everything is up, both phases become no-ops for unchanged resources.
+## NOTE: -target=module.vpc is essential. -target=module.eks_cluster alone only
+## creates VPC + subnets (the direct refs) and skips NAT/route tables/IGW, leaving
+## nodes with no internet egress and unable to reach the EC2 API to bootstrap.
+stage-up: stage-init
+	cd $(TF_STAGE) && terraform apply -target=module.vpc -target=module.eks_cluster -target=module.eks_addons
+	$(MAKE) stage-kubeconfig
+	cd $(TF_STAGE) && terraform apply
+
+## Like stage-up but auto-confirms both phases (unattended / CI runs / Phase 10).
+stage-up-auto: stage-init
+	cd $(TF_STAGE) && terraform apply -target=module.vpc -target=module.eks_cluster -target=module.eks_addons -auto-approve
+	$(MAKE) stage-kubeconfig
+	cd $(TF_STAGE) && terraform apply -auto-approve
+
+## Plan changes against the stage environment.
+stage-plan: stage-init
+	cd $(TF_STAGE) && terraform plan
+
+## Tear down the stage environment. Bootstrap stack survives so state is preserved for the next stage-up.
+stage-down:
+	cd $(TF_STAGE) && terraform destroy
+
+## Build + push all 8 ECR images (6 Go services + web + keycloak). Tags with git short SHA + `latest`.
+## --platform linux/amd64 is required when building on an arm64 Mac (EKS nodes are amd64).
+ecr-push:
+	@IMAGES="$(ECR_IMAGES)" $(MAKE) -s _ecr-push-batch
+
+## Push a subset. Example: make ecr-push-only IMAGES="keycloak web"
+ecr-push-only:
+	@test -n "$(IMAGES)" || { echo 'Usage: make ecr-push-only IMAGES="keycloak web"'; exit 1; }
+	@$(MAKE) -s _ecr-push-batch
+
+# Internal: shared push loop. Caller passes IMAGES.
+_ecr-push-batch:
+	@ACCOUNT_ID=$$(aws sts get-caller-identity --query Account --output text) && \
+	  REGION=$$(terraform -chdir=$(TF_BOOTSTRAP) output -raw region) && \
+	  REGISTRY="$$ACCOUNT_ID.dkr.ecr.$$REGION.amazonaws.com" && \
+	  TAG=$$(git rev-parse --short HEAD) && \
+	  aws ecr get-login-password --region "$$REGION" | docker login --username AWS --password-stdin "$$REGISTRY" && \
+	  for img in $(IMAGES); do \
+	    echo "==> $$img"; \
+	    docker build --platform linux/amd64 \
+	      -t "$$REGISTRY/$$img:$$TAG" -t "$$REGISTRY/$$img:latest" \
+	      -f apps/$$img/Dockerfile . || exit 1; \
+	    docker push "$$REGISTRY/$$img:$$TAG" || exit 1; \
+	    docker push "$$REGISTRY/$$img:latest" || exit 1; \
+	  done
+	@echo ""
+	@echo "Pushed tag = $$(git rev-parse --short HEAD) (also tagged latest)"
+
+## Write a local kubeconfig pointing at the stage EKS cluster. Run after stage-up.
+stage-kubeconfig:
+	@REGION=$$(terraform -chdir=$(TF_BOOTSTRAP) output -raw region) && \
+	  NAME=$$(terraform -chdir=$(TF_STAGE) output -raw eks_cluster_name) && \
+	  aws eks update-kubeconfig --region "$$REGION" --name "$$NAME" --alias twitter-mc-stage
+
+## Remove a stale S3 state lock. Use when an interrupted apply/destroy left an orphan tflock.
+## Verify nothing is actually running first: `ps aux | grep terraform | grep -v grep` should be empty.
+stage-unlock:
+	@BUCKET=$$(terraform -chdir=$(TF_BOOTSTRAP) output -raw state_bucket) && \
+	  REGION=$$(terraform -chdir=$(TF_BOOTSTRAP) output -raw region) && \
+	  aws s3 rm "s3://$$BUCKET/stage/terraform.tfstate.tflock" --region "$$REGION"
+
+## Activate the repo's git hooks (terraform fmt on commit). Run once per clone.
+githooks:
+	@git config core.hooksPath .githooks && echo "git hooks activated from .githooks/"
 
 ## Show available targets
 help:

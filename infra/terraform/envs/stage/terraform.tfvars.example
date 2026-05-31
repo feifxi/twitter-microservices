@@ -1,0 +1,5 @@
+project     = "twitter-mc"
+region      = "ap-southeast-1"
+image_tag   = "latest"
+root_domain = "chanombude.me"
+subdomain   = "twitter"

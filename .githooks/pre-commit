@@ -1,0 +1,27 @@
+#!/bin/sh
+# Auto-formats staged terraform files before commit.
+# Activate once per clone: `make githooks` (or `git config core.hooksPath .githooks`).
+
+set -e
+
+staged_tf=$(git diff --cached --name-only --diff-filter=ACM | grep '\.tf$' || true)
+if [ -z "$staged_tf" ]; then
+  exit 0
+fi
+
+if ! command -v terraform >/dev/null 2>&1; then
+  echo "pre-commit: terraform not on PATH, skipping fmt check" >&2
+  exit 0
+fi
+
+# Only run on files actually staged so we don't surprise the user by formatting
+# unrelated files they didn't touch.
+needs_fmt=$(echo "$staged_tf" | xargs terraform fmt -check -list 2>/dev/null || true)
+if [ -z "$needs_fmt" ]; then
+  exit 0
+fi
+
+echo "pre-commit: formatting $(echo "$needs_fmt" | wc -l | tr -d ' ') terraform file(s)"
+echo "$needs_fmt" | xargs terraform fmt -write
+echo "$needs_fmt" | xargs git add
+echo "pre-commit: re-staged formatted files"

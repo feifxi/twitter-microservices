@@ -142,7 +142,7 @@ services:
     image: maven:3.9-eclipse-temurin-17
     working_dir: /build
     volumes:
-      - ./local/keycloak-spi:/build
+      - ./apps/keycloak-spi:/build
       - keycloak_providers:/output
       - maven_cache:/root/.m2
     command: >

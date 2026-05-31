@@ -1,7 +1,6 @@
 _format_version: "3.0"
 _transform: true
 
-# ── Consumer ───────────────────────────────────────────────────────────────────
 # Kong JWT plugin validates Keycloak-issued RS256 tokens.
 # The consumer key matches the iss claim: http://localhost:8080/realms/twitter
 # KC_HOSTNAME_URL in docker-compose pins this to localhost:8080 so the iss is
@@ -25,7 +24,6 @@ consumers:
           nQIDAQAB
           -----END PUBLIC KEY-----
 
-# ── Services ───────────────────────────────────────────────────────────────────
 
 services:
 

@@ -28,20 +28,20 @@ test-results/
 playwright-report/
 
 # Terraform
-infra/terraform/.terraform/
-infra/terraform/*.tfstate
-infra/terraform/*.tfstate.backup
-infra/terraform/*.tfplan
-infra/terraform/.terraform.lock.hcl
+infra/terraform/**/.terraform/
+infra/terraform/**/*.tfstate
+infra/terraform/**/*.tfstate.backup
+infra/terraform/**/*.tfplan
+infra/terraform/**/terraform.tfvars
+# .terraform.lock.hcl is committed — pins provider versions for reproducible installs
 
 # Secrets / credentials (never commit these)
 *.pem
 *.key
-secrets/
 .secrets
 .env.keys
 local/keycloak/realm-twitter.json
-local/keycloak-spi/target/
+apps/keycloak-spi/target/
 
 # Docker
 .dockerignore
