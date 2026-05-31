@@ -1,9 +1,10 @@
 # amazon-cloudwatch-observability EKS managed addon installs the CloudWatch
 # agent (Container Insights metrics) + Fluent Bit (container logs to CW Logs)
-# in one bundle. Replaces the older standalone helm dance. Agent config below
-# also enables Prometheus scraping of /metrics on every pod that opts in via
-# pod annotation `scrape: "true"` — feeds app-level metrics into CW under the
-# ContainerInsights/Prometheus namespace.
+# in one bundle. Replaces the older standalone helm dance.
+#
+# Container Insights gives pod/node CPU + memory + network out of the box.
+# App-level metrics (Prometheus /metrics) are not scraped by this addon — the
+# CW Agent Operator does that, deferred to the scale-out path.
 
 module "cloudwatch_agent_irsa" {
   source  = "terraform-aws-modules/iam/aws//modules/iam-role-for-service-accounts-eks"
@@ -31,40 +32,7 @@ resource "aws_eks_addon" "cloudwatch_observability" {
   service_account_role_arn    = module.cloudwatch_agent_irsa.iam_role_arn
   resolve_conflicts_on_create = "OVERWRITE"
   resolve_conflicts_on_update = "OVERWRITE"
-
-  # Prometheus scrape pointed at the apps namespace. Picks up any pod that
-  # exposes a port named "metrics" and lands the samples in CloudWatch as EMF
-  # under the ContainerInsights/Prometheus metric namespace.
-  configuration_values = jsonencode({
-    agent = {
-      config = {
-        logs = {
-          metrics_collected = {
-            prometheus = {
-              prometheus_config_path = "/etc/prometheusconfig/prometheus.yaml"
-              emf_processor = {
-                metric_declaration = [{
-                  source_labels = ["job"]
-                  label_matcher = "twitter-apps"
-                  dimensions    = [["ClusterName", "Namespace", "service"]]
-                  metric_selectors = [
-                    "^outbox_pending_count$",
-                    "^http_requests_total$",
-                    "^http_request_duration_seconds.*",
-                  ]
-                }]
-              }
-            }
-          }
-        }
-      }
-    }
-    containerLogs = {
-      enabled = true
-    }
-  })
-
-  tags = var.tags
+  tags                        = var.tags
 }
 
 # Single SNS topic for every alarm. Subscriber confirms via email link AWS
@@ -80,7 +48,7 @@ resource "aws_sns_topic_subscription" "email" {
   endpoint  = var.alarm_email
 }
 
-# Alarm 1: ALB target 5xx > 10 / minute
+# Alarm 1: ALB target 5xx > 10 / minute.
 # Native ALB CloudWatch metric, no app instrumentation needed.
 resource "aws_cloudwatch_metric_alarm" "alb_5xx" {
   alarm_name          = "${var.name}-alb-5xx"
@@ -103,9 +71,9 @@ resource "aws_cloudwatch_metric_alarm" "alb_5xx" {
   tags = var.tags
 }
 
-# Alarm 2: Kafka consumer lag > 30s (proxy: max offset lag > 1000 messages,
-# tunable). MaxOffsetLag is the per-consumer-group rollup MSK emits without
-# enabling open monitoring (which would cost extra).
+# Alarm 2: MSK consumer lag > 1000 messages sustained 3 min.
+# MaxOffsetLag is the per-broker rollup MSK emits without enabling open
+# monitoring (Prometheus exporter would cost extra).
 resource "aws_cloudwatch_metric_alarm" "kafka_lag" {
   alarm_name          = "${var.name}-kafka-consumer-lag"
   alarm_description   = "MSK consumer-group offset lag breached 1000 messages, sustained for 3 minutes."
@@ -127,27 +95,25 @@ resource "aws_cloudwatch_metric_alarm" "kafka_lag" {
   tags = var.tags
 }
 
-# Alarm 3: outbox depth growing. Requires services to expose
-# `outbox_pending_count` on their /metrics endpoint AND the prometheus scrape
-# above to pick it up. Fires when any service's outbox has > 100 unsent rows
-# for 5 minutes — symptom of the outbox publisher being stuck.
-resource "aws_cloudwatch_metric_alarm" "outbox_depth" {
-  alarm_name          = "${var.name}-outbox-depth"
-  alarm_description   = "Outbox has > 100 unsent rows for 5 minutes. Publisher goroutine likely stuck or Kafka producer failing."
+# Alarm 3: Aurora CPU > 80% sustained 5 min.
+# Native RDS metric. Catches runaway queries / outbox publisher hot-looping /
+# unindexed scans before they cascade into latency on dependent services.
+resource "aws_cloudwatch_metric_alarm" "aurora_cpu" {
+  alarm_name          = "${var.name}-aurora-cpu"
+  alarm_description   = "Aurora cluster CPU > 80% for 5 minutes. Check slow query log."
   comparison_operator = "GreaterThanThreshold"
   evaluation_periods  = 5
-  metric_name         = "outbox_pending_count"
-  namespace           = "ContainerInsights/Prometheus"
+  metric_name         = "CPUUtilization"
+  namespace           = "AWS/RDS"
   period              = 60
-  statistic           = "Maximum"
-  threshold           = 100
+  statistic           = "Average"
+  threshold           = 80
   treat_missing_data  = "notBreaching"
   alarm_actions       = [aws_sns_topic.alarms.arn]
   ok_actions          = [aws_sns_topic.alarms.arn]
 
   dimensions = {
-    ClusterName = var.cluster_name
-    Namespace   = var.apps_namespace
+    DBClusterIdentifier = var.aurora_cluster_identifier
   }
 
   tags = var.tags

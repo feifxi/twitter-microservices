@@ -22,12 +22,13 @@ on:
 permissions:
   contents: read
   id-token: write
-  pull-requests: write
 
 env:
   AWS_REGION: ap-southeast-1
   TF_VERSION: 1.9.8
   TF_DIR: infra/terraform/envs/stage
+  # Bootstrap creates this bucket as `${project}-tfstate-${account_id}`.
+  TF_STATE_BUCKET: twitter-mc-tfstate-${{ vars.AWS_ACCOUNT_ID }}
 
 jobs:
   fmt-validate:
@@ -61,18 +62,12 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TF_VERSION }}
-      - name: Resolve backend from bootstrap outputs
-        id: backend
-        working-directory: infra/terraform/bootstrap
-        run: |
-          terraform init
-          echo "bucket=$(terraform output -raw state_bucket)" >> "$GITHUB_OUTPUT"
       - name: init + plan
         working-directory: ${{ env.TF_DIR }}
         run: |
           terraform init -reconfigure \
-            -backend-config="bucket=${{ steps.backend.outputs.bucket }}" \
-            -backend-config="region=${{ env.AWS_REGION }}"
+            -backend-config="bucket=${TF_STATE_BUCKET}" \
+            -backend-config="region=${AWS_REGION}"
           terraform plan -no-color -input=false | tee plan.txt
       - uses: actions/upload-artifact@v4
         with:
@@ -94,21 +89,15 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TF_VERSION }}
-      - name: Resolve backend
-        id: backend
-        working-directory: infra/terraform/bootstrap
-        run: |
-          terraform init
-          echo "bucket=$(terraform output -raw state_bucket)" >> "$GITHUB_OUTPUT"
-      # Same two-phase pattern as `make stage-up-auto`: the alekc/kubectl
-      # provider needs the EKS endpoint at config time, which doesn't exist
-      # on cold start. -target the cluster first, then full apply.
+      # Two-phase apply mirrors `make stage-up-auto`. The alekc/kubectl
+      # provider needs the EKS endpoint at config time; on cold start the
+      # cluster doesn't exist, so `-target` the cluster first.
       - name: apply (cluster + addons)
         working-directory: ${{ env.TF_DIR }}
         run: |
           terraform init -reconfigure \
-            -backend-config="bucket=${{ steps.backend.outputs.bucket }}" \
-            -backend-config="region=${{ env.AWS_REGION }}"
+            -backend-config="bucket=${TF_STATE_BUCKET}" \
+            -backend-config="region=${AWS_REGION}"
           terraform apply -auto-approve \
             -target=module.vpc \
             -target=module.eks_cluster \
@@ -131,12 +120,9 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TF_VERSION }}
-      - name: Resolve backend
-        id: backend
-        working-directory: infra/terraform/bootstrap
-        run: |
-          terraform init
-          echo "bucket=$(terraform output -raw state_bucket)" >> "$GITHUB_OUTPUT"
+      # Delete the Ingress first so the ALB controller releases the ALB
+      # before the cluster is destroyed. Skipping this leaves an orphan ALB
+      # whose ENIs block VPC delete (see docs/DEPLOY.md teardown gotchas).
       - name: Pre-cleanup ALB Ingress
         run: |
           aws eks update-kubeconfig --region "$AWS_REGION" --name twitter-mc-stage || true
@@ -146,6 +132,6 @@ jobs:
         working-directory: ${{ env.TF_DIR }}
         run: |
           terraform init -reconfigure \
-            -backend-config="bucket=${{ steps.backend.outputs.bucket }}" \
-            -backend-config="region=${{ env.AWS_REGION }}"
+            -backend-config="bucket=${TF_STATE_BUCKET}" \
+            -backend-config="region=${AWS_REGION}"
           terraform destroy -auto-approve

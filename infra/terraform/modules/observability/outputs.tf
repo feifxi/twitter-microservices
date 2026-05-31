@@ -6,8 +6,8 @@ output "sns_topic_arn" {
 output "alarm_arns" {
   description = "Map of alarm short-name -> ARN. Handy for cross-referencing in dashboards."
   value = {
-    alb_5xx      = aws_cloudwatch_metric_alarm.alb_5xx.arn
-    kafka_lag    = aws_cloudwatch_metric_alarm.kafka_lag.arn
-    outbox_depth = aws_cloudwatch_metric_alarm.outbox_depth.arn
+    alb_5xx    = aws_cloudwatch_metric_alarm.alb_5xx.arn
+    kafka_lag  = aws_cloudwatch_metric_alarm.kafka_lag.arn
+    aurora_cpu = aws_cloudwatch_metric_alarm.aurora_cpu.arn
   }
 }

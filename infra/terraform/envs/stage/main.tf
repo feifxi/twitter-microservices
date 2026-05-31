@@ -211,15 +211,14 @@ module "autoscaling" {
 module "observability" {
   source = "../../modules/observability"
 
-  name              = local.resource_prefix
-  cluster_name      = module.eks_cluster.cluster_name
-  oidc_provider_arn = module.eks_cluster.oidc_provider_arn
-  region            = var.region
-  alarm_email       = var.alarm_email
-  msk_cluster_name  = module.msk.cluster_name
-  alb_arn_suffix    = module.ingress.alb_arn_suffix
-  apps_namespace    = module.secrets.apps_namespace
-  tags              = local.tags
+  name                      = local.resource_prefix
+  cluster_name              = module.eks_cluster.cluster_name
+  oidc_provider_arn         = module.eks_cluster.oidc_provider_arn
+  alarm_email               = var.alarm_email
+  msk_cluster_name          = module.msk.cluster_name
+  alb_arn_suffix            = module.ingress.alb_arn_suffix
+  aurora_cluster_identifier = module.aurora.cluster_identifier
+  tags                      = local.tags
 
   depends_on = [module.eks_addons, module.ingress, module.msk]
 }

@@ -3,6 +3,11 @@ output "cluster_endpoint" {
   value       = aws_rds_cluster.this.endpoint
 }
 
+output "cluster_identifier" {
+  description = "Used as the DBClusterIdentifier dimension for AWS/RDS CloudWatch alarms."
+  value       = aws_rds_cluster.this.cluster_identifier
+}
+
 output "reader_endpoint" {
   value = aws_rds_cluster.this.reader_endpoint
 }

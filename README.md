@@ -51,7 +51,7 @@ What this project demonstrates end-to-end. Implementation detail in [docs/ARCHIT
 | Search | OpenSearch | Amazon OpenSearch Service |
 | Object storage | LocalStack (S3) | Amazon S3 |
 | Orchestration | Docker Compose | Amazon EKS · Terraform |
-| Observability | slog · Prometheus · OpenTelemetry → Jaeger | slog · CloudWatch · OpenTelemetry → X-Ray |
+| Observability | slog · Prometheus · OpenTelemetry → Jaeger | slog · CloudWatch Container Insights + Logs |
 
 ## Services
 
@@ -134,7 +134,6 @@ auth via OIDC, no stored keys.
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — service layout, data models, Kafka contracts, Redis schema, conventions
 - [docs/DEPLOY.md](docs/DEPLOY.md) — AWS stage env runbook (bootstrap → up → down)
 - [docs/CHAOS.md](docs/CHAOS.md) — chaos exercise procedures
-- [docs/PHASES.md](docs/PHASES.md) — phase-by-phase build history
 
 ## Troubleshooting
 

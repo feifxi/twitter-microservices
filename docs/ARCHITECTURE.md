@@ -1839,17 +1839,19 @@ endpoints.
 - **SSE hub:** non-blocking local fan-out — slow browser tabs don't stall the Kafka consumer.
 - **Bounded fan-out concurrency:** 100-slot semaphore in feed-service caps inflight fan-out goroutines on a burst of high-follower tweets.
 
-### Shipped (Phase 9 — production observability on EKS)
+### Production observability on EKS
 
 - **CloudWatch Container Insights** via the managed `amazon-cloudwatch-observability` EKS addon. Pod CPU / memory / network, node-level metrics, container logs to CW Logs. Replaces the older standalone CloudWatch-agent + Fluent Bit Helm dance.
 - **3 CloudWatch alarms** fanned to one SNS topic (email subscriber):
-  - **ALB 5xx > 10/min** — native `AWS/ApplicationELB.HTTPCode_Target_5XX_Count`, no app instrumentation.
+  - **ALB 5xx > 10/min** — native `AWS/ApplicationELB.HTTPCode_Target_5XX_Count`.
   - **Kafka consumer lag** — `AWS/Kafka.MaxOffsetLag > 1000` sustained 3 min, per-broker.
-  - **Outbox depth** — `outbox_pending_count > 100` sustained 5 min, scraped from `/metrics` via the CW agent's Prometheus EMF processor.
+  - **Aurora CPU > 80%** — `AWS/RDS.CPUUtilization` sustained 5 min, on the cluster identifier.
+
+  All three use native CloudWatch metrics, so no app instrumentation. App-level alarms (outbox depth, per-service RED) require Prometheus scraping via the CW Agent Operator — deferred to the scale-out path.
 - **HPA on tweet-service + feed-service** — CPU 60%, 1→5 replicas, 60s scale-up window.
 - **k6 load test** — in-cluster Job, 50 feed reads + 20 posts/sec × 2min through Kong. Drives the HPA. See [`infra/k8s/loadtest/`](../infra/k8s/loadtest/).
 
-### Shipped (Phase 12 — Resilience)
+### Resilience extras
 
 - **`/healthz` dependency probes:** concurrent ping of each service's real deps (Postgres, Redis, OpenSearch) with a 1.5s timeout; returns 503 with a per-dep status body when any fails. ALB / k8s `readinessProbe` use this. `/livez` stays cheap and is used for liveness so transient blips don't restart pods.
 - **gRPC retry with backoff + jitter** on the four cross-service clients (feed → user, feed → tweet, search → user, search → tweet). Sits inside the gobreaker boundary so the breaker observes the final outcome. 3 attempts, 50ms base, 500ms cap, full jitter; retries only on `Unavailable` / `DeadlineExceeded`, never on application-level codes. Context-cancellation aware.
