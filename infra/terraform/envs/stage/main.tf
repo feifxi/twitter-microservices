@@ -196,3 +196,31 @@ module "ingress" {
   depends_on = [module.apps, module.kong, module.keycloak]
 }
 
+# HPA on tweet-service + feed-service (CPU 60%, 1->5 replicas). Requires
+# metrics-server (installed by eks_addons).
+module "autoscaling" {
+  source = "../../modules/autoscaling"
+
+  namespace = module.secrets.apps_namespace
+
+  depends_on = [module.apps, module.eks_addons]
+}
+
+# Container Insights (metrics + logs) via the managed amazon-cloudwatch-observability
+# addon + 3 CloudWatch alarms wired to an SNS email subscription.
+module "observability" {
+  source = "../../modules/observability"
+
+  name              = local.resource_prefix
+  cluster_name      = module.eks_cluster.cluster_name
+  oidc_provider_arn = module.eks_cluster.oidc_provider_arn
+  region            = var.region
+  alarm_email       = var.alarm_email
+  msk_cluster_name  = module.msk.cluster_name
+  alb_arn_suffix    = module.ingress.alb_arn_suffix
+  apps_namespace    = module.secrets.apps_namespace
+  tags              = local.tags
+
+  depends_on = [module.eks_addons, module.ingress, module.msk]
+}
+

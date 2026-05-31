@@ -25,3 +25,9 @@ variable "subdomain" {
   type        = string
   default     = "twitter"
 }
+
+variable "alarm_email" {
+  description = "Email address that receives CloudWatch alarm notifications. Confirm the SNS subscription email after first apply."
+  type        = string
+  default     = "wtdoge5485@gmail.com"
+}

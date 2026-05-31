@@ -11,7 +11,7 @@ REALM_VARS := '$${GOOGLE_CLIENT_ID} $${GOOGLE_CLIENT_SECRET} $${KEYCLOAK_ADMIN_C
 .PHONY: dev dev-infra dev-stop env-check \
         run-user-service run-tweet-service run-feed-service run-notification-service run-media-service run-search-service run-web \
         build test test-integration test-e2e test-all generate-sqlc generate-proto generate-realm lint healthcheck help \
-        stage-bootstrap stage-init stage-up stage-up-auto stage-plan stage-down stage-unlock stage-kubeconfig ecr-push ecr-push-only _ecr-push-batch githooks
+        stage-bootstrap stage-init stage-up stage-up-auto stage-plan stage-down stage-unlock stage-kubeconfig stage-loadtest ecr-push ecr-push-only _ecr-push-batch githooks
 
 TF_BOOTSTRAP := infra/terraform/bootstrap
 TF_STAGE     := infra/terraform/envs/stage
@@ -266,6 +266,15 @@ stage-unlock:
 	@BUCKET=$$(terraform -chdir=$(TF_BOOTSTRAP) output -raw state_bucket) && \
 	  REGION=$$(terraform -chdir=$(TF_BOOTSTRAP) output -raw region) && \
 	  aws s3 rm "s3://$$BUCKET/stage/terraform.tfstate.tflock" --region "$$REGION"
+
+## Run the in-cluster k6 load test (50 reads + 20 posts/sec x 2min via Kong).
+## Pre-req: BASE_URL + JWT_TOKEN already set as k6-env ConfigMap/Secret in the apps namespace.
+## See infra/k8s/loadtest/README.md for the token-fetch + env-setup recipe.
+stage-loadtest:
+	@kubectl --context twitter-mc-stage -n apps delete job k6-loadtest --ignore-not-found
+	@kubectl --context twitter-mc-stage apply -f infra/k8s/loadtest/
+	@echo "Tail logs:  kubectl --context twitter-mc-stage -n apps logs -f job/k6-loadtest"
+	@echo "Watch HPA:  kubectl --context twitter-mc-stage -n apps get hpa -w"
 
 ## Activate the repo's git hooks (terraform fmt on commit). Run once per clone.
 githooks:

@@ -1,0 +1,64 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: k6-script
+  namespace: apps
+data:
+  load.js: |
+    // 2-minute load test against Kong: 50 feed reads/sec + 20 posts/sec.
+    // Goal: drive tweet-service + feed-service CPU above the 60% HPA target
+    // so you can watch `kubectl get hpa -w` scale 1 -> N.
+    //
+    // Required env at job runtime:
+    //   BASE_URL   - e.g. https://api.twitter.<your-domain>
+    //   JWT_TOKEN  - Keycloak-issued RS256 token for a test user
+    import http from "k6/http";
+    import { check, sleep } from "k6";
+
+    export const options = {
+      scenarios: {
+        feed_reads: {
+          executor: "constant-arrival-rate",
+          rate: 50,
+          timeUnit: "1s",
+          duration: "2m",
+          preAllocatedVUs: 50,
+          maxVUs: 200,
+          exec: "readFeed",
+        },
+        tweet_posts: {
+          executor: "constant-arrival-rate",
+          rate: 20,
+          timeUnit: "1s",
+          duration: "2m",
+          preAllocatedVUs: 20,
+          maxVUs: 80,
+          exec: "postTweet",
+        },
+      },
+      thresholds: {
+        http_req_failed:   ["rate<0.05"],
+        http_req_duration: ["p(95)<800"],
+      },
+    };
+
+    const BASE = __ENV.BASE_URL;
+    const TOKEN = __ENV.JWT_TOKEN;
+    const headers = {
+      Authorization: `Bearer ${TOKEN}`,
+      "Content-Type": "application/json",
+    };
+
+    export function readFeed() {
+      const r = http.get(`${BASE}/v1/feed?limit=20`, { headers });
+      check(r, { "feed 2xx": (x) => x.status >= 200 && x.status < 300 });
+    }
+
+    export function postTweet() {
+      const body = JSON.stringify({
+        body: `k6 load ${Date.now()} ${Math.random()}`,
+      });
+      const r = http.post(`${BASE}/v1/tweets`, body, { headers });
+      check(r, { "tweet 2xx": (x) => x.status >= 200 && x.status < 300 });
+      sleep(0.05);
+    }

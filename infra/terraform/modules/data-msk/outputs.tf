@@ -12,6 +12,11 @@ output "cluster_arn" {
   value = aws_msk_cluster.this.arn
 }
 
+output "cluster_name" {
+  description = "Used as the dimension for AWS/Kafka CloudWatch alarms."
+  value       = aws_msk_cluster.this.cluster_name
+}
+
 output "security_group_id" {
   value = aws_security_group.this.id
 }

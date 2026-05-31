@@ -3,6 +3,11 @@ output "alb_hostname" {
   value       = kubernetes_ingress_v1.main.status[0].load_balancer[0].ingress[0].hostname
 }
 
+output "alb_arn_suffix" {
+  description = "ALB ARN suffix in the form app/<name>/<id>. The dimension CloudWatch uses for ALB metrics."
+  value       = data.aws_lb.ingress.arn_suffix
+}
+
 output "web_url" {
   description = "Public HTTPS URL of the Next.js web app."
   value       = "https://${var.domain}"

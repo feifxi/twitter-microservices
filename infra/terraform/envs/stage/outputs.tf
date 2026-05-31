@@ -101,3 +101,8 @@ output "auth_url" {
 output "alb_hostname" {
   value = module.ingress.alb_hostname
 }
+
+output "alarms_sns_topic_arn" {
+  description = "SNS topic that fans out CloudWatch alarms. Confirm the email subscription after first apply."
+  value       = module.observability.sns_topic_arn
+}
