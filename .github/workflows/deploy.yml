@@ -1,11 +1,10 @@
 name: Deploy
 
+# Manual-only. The stage env isn't always live — tearing it down between
+# sessions is part of the cost model — so auto-pushing on every merge to
+# main would just fail when the cluster isn't there. Trigger from the
+# Actions tab when you've actually brought the env up.
 on:
-  push:
-    branches: [main]
-    paths:
-      - "apps/**"
-      - ".github/workflows/deploy.yml"
   workflow_dispatch:
     inputs:
       images:
