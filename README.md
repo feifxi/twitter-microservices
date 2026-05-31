@@ -113,9 +113,28 @@ make healthcheck       # curl all /healthz endpoints
 | OpenSearch | http://localhost:9200 |
 | LocalStack S3 | http://localhost:4566 |
 
+## Deploy to AWS
+
+```bash
+make stage-bootstrap   # one-time: S3 state + DDB lock + GitHub OIDC + $50 budget
+make ecr-push          # build + push 8 images to ECR
+make stage-up          # provision EKS, data plane, apps; ~30 min wall-clock
+```
+
+Operational runbook: [docs/DEPLOY.md](docs/DEPLOY.md). `make stage-down`
+tears the env down to ~$0 between sessions; bootstrap stack survives so
+state is preserved.
+
+CI/CD via GitHub Actions: `ci.yml` (Go matrix + Next.js), `infra.yml`
+(terraform plan/apply), `deploy.yml` (ECR build + EKS rollout). All AWS
+auth via OIDC, no stored keys.
+
 ## Docs
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — service layout, data models, Kafka contracts, Redis schema, conventions
+- [docs/DEPLOY.md](docs/DEPLOY.md) — AWS stage env runbook (bootstrap → up → down)
+- [docs/CHAOS.md](docs/CHAOS.md) — chaos exercise procedures
+- [docs/PHASES.md](docs/PHASES.md) — phase-by-phase build history
 
 ## Troubleshooting
 

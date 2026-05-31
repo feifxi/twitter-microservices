@@ -76,31 +76,52 @@ OAuth 2.0 Authorization Code flow, httpOnly cookie storage, silent token refresh
 
 ---
 
-## Phase 9 — AWS Infrastructure (Terraform + EKS) 🔄 In Progress
-VPC (3 AZs, 1 NAT), EKS cluster, ECR repos, Aurora Serverless v2, ElastiCache, MSK, OpenSearch Service, Secrets Manager + External Secrets Operator, Keycloak production Helm chart (`start` mode, TLS, JWKS-based Kong JWT), ALB + WAF, CloudFront, smoke tests.
+## Phase 9 — AWS Infrastructure (Terraform + EKS) ✅
+Single `stage` env, ~$10.50/day always-on, tear-down between sessions
+(`make stage-up` / `make stage-down`). Terraform code at
+[`infra/terraform/`](../infra/terraform/), operational runbook at
+[`docs/DEPLOY.md`](DEPLOY.md).
+
+Shipped:
+- VPC (2 AZs, 1 NAT, S3+ECR VPC endpoints), EKS cluster + IRSA + managed addons
+- ECR (8 repos: 6 services + web + keycloak) with lifecycle policy
+- Data plane: Aurora SV2 (auto-pause, schema-per-service), ElastiCache standalone, MSK (2 brokers provisioned), OpenSearch single-node
+- Secrets Manager + External Secrets Operator (`ClusterSecretStore` + per-service `ExternalSecret`s)
+- Keycloak production image (custom SPI baked in, `--import-realm` on first boot, `KC_PROXY_HEADERS=xforwarded`)
+- Kong DB-less + JWT plugin (RS256 against the realm's public key) + Lua pre-function for X-User-* header injection
+- AWS Load Balancer Controller → single ALB with host-based routing for web / api / auth
+- Route53 zone with subdomain delegation at registrar, ACM cert via DNS-01
+- CloudWatch Container Insights (managed addon) + 3 alarms (5xx, Kafka lag, outbox depth) → SNS email
+- HPA on tweet+feed (CPU 60%, 1→5) + k6 in-cluster Job for load demo
+
+End-to-end validated against `https://twitter.chanombude.me`, then torn down.
 
 ---
 
-## Phase 10 — CI/CD Pipeline ⬜
-GitHub Actions: `ci.yml` (vet + test + build matrix per service + Biome), `deploy.yml` (integration → ECR → helm upgrade), `infra.yml` (terraform plan on PR / apply on merge). OIDC auth to AWS (no stored keys). Branch protection: CI must pass, linear history.
+## Phase 10 — CI/CD Pipeline ✅
+GitHub Actions in [`.github/workflows/`](../.github/workflows/):
+- `ci.yml` — Go matrix (vet + build + race-tested) per service on PR / push; Next.js biome + build
+- `deploy.yml` — matrix build + push of all 8 ECR images on push to main, then `kubectl rollout restart` against the `stage` cluster (gated by GitHub Environment)
+- `infra.yml` — fmt + validate on every PR; plan on PR, apply on push to main, manual dispatch for `destroy`. Two-phase apply mirrors `make stage-up-auto`.
+
+AWS auth via OIDC — no stored keys. Role + trust policy bootstrapped by [`infra/terraform/bootstrap/github_oidc.tf`](../infra/terraform/bootstrap/github_oidc.tf).
 
 ---
 
-## Phase 11 — Observability ✅ (local) / 🔄 (production)
-**Shipped locally:** OTel exporter to Jaeger over OTLP gRPC, W3C `traceparent`
+## Phase 11 — Observability ✅
+**Local:** OTel exporter to Jaeger over OTLP gRPC, W3C `traceparent`
 propagated through HTTP / gRPC / Kafka headers; auto-instrumented Gin (via
 shared `reqlog.TraceContext` + `metrics.GinMiddleware`), gRPC (`otelgrpc`),
 Redis, pgx. Prometheus `/metrics` endpoint on every service, scraped by a local
 Prometheus instance.
 
-**Remaining for production:** CloudWatch EMF mapping for the existing Prometheus
-surface, Container Insights, alarms (5xx > 10/min → SNS, Kafka lag > 30s,
-outbox depth growing), `version` field in logs via `-ldflags`, X-Ray exporter
-in prod.
+**Production:** rolled into Phase 9 — Container Insights + Prometheus EMF
+scraping via the `amazon-cloudwatch-observability` managed addon, 3 alarms
+fanned to SNS. See Phase 9 above.
 
 ---
 
-## Phase 12 — Resilience & Load Testing 🔄 In Progress
+## Phase 12 — Resilience & Load Testing ✅
 **Shipped:** Circuit breakers (gobreaker) wrap every gRPC client in
 feed-service and search-service; graceful degradation across the stack
 (Redis miss → empty fields / fallback to OpenSearch denormalised counts;
@@ -108,9 +129,9 @@ gRPC failure → `is_liked`/`is_retweeted=false`; OpenAI down → keyword
 fallback); DLQs per consumer group with provenance headers; bounded fan-out
 concurrency.
 
-**Shipped this phase:** `/healthz` dep probes + `/livez` split; gRPC retry interceptor (backoff + jitter, inside the breaker boundary).
-**Remaining local:** chaos exercises (kill feed-service, kill Redis) documented as a procedure.
-**Deferred to Phase 9:** HPA (CPU 60%) and k6 load test — neither produces a meaningful signal against docker-compose.
+`/healthz` dep probes + `/livez` split; gRPC retry interceptor (backoff +
+jitter, inside the breaker boundary). Chaos procedure documented at
+[`docs/CHAOS.md`](CHAOS.md). HPA + k6 load demo shipped in Phase 9.
 
 ---
 

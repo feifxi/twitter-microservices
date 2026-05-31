@@ -1,0 +1,112 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/**"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch:
+    inputs:
+      images:
+        description: "Space-separated image short-names to build (default: all)"
+        required: false
+        default: ""
+
+concurrency:
+  group: deploy-stage
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: ap-southeast-1
+  CLUSTER_NAME: twitter-mc-stage
+  APPS_NAMESPACE: apps
+
+jobs:
+  build-push:
+    name: Build & push ${{ matrix.image }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - user-service
+          - tweet-service
+          - feed-service
+          - notification-service
+          - media-service
+          - search-service
+          - web
+          - keycloak
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/twitter-mc-github-actions
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: aws-actions/amazon-ecr-login@v2
+        id: ecr
+
+      - name: Set image tag
+        id: tag
+        run: echo "tag=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Skip if not in dispatch subset
+        id: gate
+        run: |
+          set -e
+          if [ -n "${{ github.event.inputs.images }}" ]; then
+            for img in ${{ github.event.inputs.images }}; do
+              if [ "$img" = "${{ matrix.image }}" ]; then
+                echo "build=true" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+            done
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build & push
+        if: steps.gate.outputs.build == 'true'
+        run: |
+          set -e
+          REGISTRY="${{ steps.ecr.outputs.registry }}"
+          TAG="${{ steps.tag.outputs.tag }}"
+          docker build --platform linux/amd64 \
+            -t "$REGISTRY/${{ matrix.image }}:$TAG" \
+            -t "$REGISTRY/${{ matrix.image }}:latest" \
+            -f apps/${{ matrix.image }}/Dockerfile .
+          docker push "$REGISTRY/${{ matrix.image }}:$TAG"
+          docker push "$REGISTRY/${{ matrix.image }}:latest"
+
+  rollout:
+    name: Rollout to EKS
+    needs: build-push
+    runs-on: ubuntu-24.04
+    environment: stage
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/twitter-mc-github-actions
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Kubeconfig
+        run: aws eks update-kubeconfig --region "$AWS_REGION" --name "$CLUSTER_NAME"
+
+      # imagePullPolicy=Always means a rollout restart re-pulls `latest`.
+      # If the cluster is down (between sessions), this fails loud — fine, you
+      # only run the deploy when you've intentionally brought the stack up.
+      - name: Rollout restart
+        run: |
+          for d in user-service tweet-service feed-service notification-service media-service search-service web keycloak; do
+            kubectl -n "$APPS_NAMESPACE" rollout restart deployment "$d" || true
+          done

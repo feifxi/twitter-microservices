@@ -1777,30 +1777,42 @@ Every Go service exports `/metrics` (Prometheus) and emits OTLP traces over
 gRPC to `jaeger:4317`. Jaeger and Prometheus run as compose services for
 parity with the production EKS observability stack.
 
-### AWS Dev Sizing (~$9/day, `terraform destroy` after each session)
+### AWS `stage` env (~$10.50/day always-on, ~$0 destroyed)
 
-| Component | Spec | Note |
-|-----------|------|------|
-| EKS cluster | — | $2.40/day regardless of usage |
-| EC2 nodes | t3.medium × 2 | All services share; Kong on same nodes |
-| Aurora Serverless v2 | 0.5 ACU min, auto-pause | Cold-start ~5s after idle |
-| ElastiCache | cache.t3.micro | Single node |
-| MSK | kafka.t3.small × 1 | 1 broker sufficient for dev |
-| OpenSearch | t3.small.search × 1 | Single node |
-| NAT Gateway | 1 AZ only | vs 3 AZs saves ~$2.83/day |
+Single environment, ephemeral. `make stage-up` to bring up; `make stage-down`
+between sessions. Operational runbook in [DEPLOY.md](DEPLOY.md). Terraform
+code in [`infra/terraform/`](../infra/terraform/).
 
-### AWS Production Reference
+| Component | Spec | $/day |
+|-----------|------|------:|
+| EKS control plane | — | $2.40 |
+| EC2 nodes | t3.medium × 2 (single node group, shared by all services) | $2.00 |
+| Aurora Serverless v2 | 0.5–1 ACU, auto-pause, schema-per-service on one cluster | ~$0.50 |
+| ElastiCache | cache.t4g.micro standalone | $0.41 |
+| MSK | kafka.t3.small × 2 brokers (provisioned, AWS minimum) | $2.20 |
+| OpenSearch | t3.small.search × 1 | $0.86 |
+| NAT Gateway | 1 (2 AZs share it) | $1.08 |
+| ALB | 1 (shared by web / api / auth via host rules) | $0.54 |
+| Secrets Manager | ~10 secrets | $0.13 |
+| CloudWatch logs | Container Insights + Fluent Bit | ~$0.50 |
+| Domain + Route53 | `.xyz` registration + hosted zone | ~$0.02 |
 
-| Component | Spec |
-|-----------|------|
-| EC2 nodes | t3.large × 3 (1/AZ) + t3.medium × 2 (Kong) |
-| ElastiCache | r7g.large, cluster mode, 3 shards × 1 replica |
-| MSK | kafka.m5.large × 3 brokers (1/AZ) |
-| OpenSearch | r6g.large.search × 2 |
-| Aurora | max 4 ACU, no auto-pause |
-| NAT Gateway | 1/AZ (3 total) |
+All secrets in AWS Secrets Manager, synced to K8s Secrets via External Secrets
+Operator at pod startup. IRSA per service for cloud API access (media-service →
+S3, cloudwatch-agent → CloudWatch, etc.).
 
-All secrets in AWS Secrets Manager, synced to K8s Secrets via External Secrets Operator at pod startup.
+### Future scale-out path
+
+Deferred for cost — design considered, code skipped. Pull in if traffic grows:
+
+- **3-AZ HA + 3 NATs** — single-AZ outage currently takes it down. ~$3.60/day extra.
+- **ElastiCache cluster mode** — needs Redis client refactor to `NewUniversalClient`.
+- **MSK Serverless or multi-broker (3+ AZs)** — provisioned baseline is $18+/day, hence the 2-broker minimum here.
+- **Dedicated node groups** for Kong and Keycloak — blast-radius isolation, separate scaling profiles.
+- **Separate RDS for Keycloak** — currently a schema on the shared Aurora cluster.
+- **WAF managed rules** — ~$15/mo, deferred as theater until there's real traffic.
+- **CloudFront in front of web** — S3 presigned URLs already CDN-cache; another CDN layer is overkill until origin egress matters.
+- **X-Ray distributed tracing** — the OTel SDK is already wired; would only need a CW EMF + X-Ray exporter swap.
 
 ---
 
@@ -1827,23 +1839,21 @@ endpoints.
 - **SSE hub:** non-blocking local fan-out — slow browser tabs don't stall the Kafka consumer.
 - **Bounded fan-out concurrency:** 100-slot semaphore in feed-service caps inflight fan-out goroutines on a burst of high-follower tweets.
 
-### Planned (Phase 11 — production observability)
+### Shipped (Phase 9 — production observability on EKS)
 
-CloudWatch EMF metrics: ingest the Prometheus surface into CW EMF; alarms on
-5xx > 10/min → SNS, Kafka consumer lag > 30s, outbox depth growing. Container
-Insights for pod-level CPU/memory. AWS X-Ray as the prod backend (OTLP-compatible
-exporter — services don't change).
+- **CloudWatch Container Insights** via the managed `amazon-cloudwatch-observability` EKS addon. Pod CPU / memory / network, node-level metrics, container logs to CW Logs. Replaces the older standalone CloudWatch-agent + Fluent Bit Helm dance.
+- **3 CloudWatch alarms** fanned to one SNS topic (email subscriber):
+  - **ALB 5xx > 10/min** — native `AWS/ApplicationELB.HTTPCode_Target_5XX_Count`, no app instrumentation.
+  - **Kafka consumer lag** — `AWS/Kafka.MaxOffsetLag > 1000` sustained 3 min, per-broker.
+  - **Outbox depth** — `outbox_pending_count > 100` sustained 5 min, scraped from `/metrics` via the CW agent's Prometheus EMF processor.
+- **HPA on tweet-service + feed-service** — CPU 60%, 1→5 replicas, 60s scale-up window.
+- **k6 load test** — in-cluster Job, 50 feed reads + 20 posts/sec × 2min through Kong. Drives the HPA. See [`infra/k8s/loadtest/`](../infra/k8s/loadtest/).
 
 ### Shipped (Phase 12 — Resilience)
 
 - **`/healthz` dependency probes:** concurrent ping of each service's real deps (Postgres, Redis, OpenSearch) with a 1.5s timeout; returns 503 with a per-dep status body when any fails. ALB / k8s `readinessProbe` use this. `/livez` stays cheap and is used for liveness so transient blips don't restart pods.
 - **gRPC retry with backoff + jitter** on the four cross-service clients (feed → user, feed → tweet, search → user, search → tweet). Sits inside the gobreaker boundary so the breaker observes the final outcome. 3 attempts, 50ms base, 500ms cap, full jitter; retries only on `Unavailable` / `DeadlineExceeded`, never on application-level codes. Context-cancellation aware.
-
-### Planned (Phase 12 — Resilience)
-
-- **Chaos exercises (local):** kill feed-service / Redis, verify graceful degradation paths still serve traffic with empty author fields / zero counts.
-- **k6 load test (Phase 9, needs EKS):** 50 concurrent feed reads + 20 tweet posts/sec for 2 min via Kong. Pairs with HPA — load against docker-compose has no autoscaling or realistic latency profile, so the signal isn't useful until services run on EKS.
-- **HPA (Phase 9):** tweet-service and feed-service scale on CPU > 60%.
+- **Chaos exercises** documented at [docs/CHAOS.md](CHAOS.md) — kill feed-service / Redis, verify graceful degradation paths still serve traffic with empty author fields / zero counts.
 
 ---
 
